@@ -1,0 +1,10 @@
+name: pyshopper
+channels:
+  - defaults
+dependencies:
+  - numpy
+  - pandas
+  - pip
+  - theano
+  - pymc3
+  - scikit-learn
