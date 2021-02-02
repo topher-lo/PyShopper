@@ -6,6 +6,7 @@ A Probabilistic Model of Consumer Choice with Substitutes and Complements.
 ArXiv 1711.03560. 2017.
 """
 
+import arviz as az
 import logging
 import numpy as np
 import theano
@@ -66,7 +67,7 @@ class Shopper:
     Note: model currently only supports ordered baskets.
 
     Attributes:
-        X (Pandas DataFrame): 
+        data (Pandas DataFrame): 
             Observed trips data (number of trips by 4).
             DataFrame with columns: user_id, item_id, session_id, and price.
 
@@ -74,7 +75,7 @@ class Shopper:
             Shopper model.
     """
     def __init__(self,
-                 X: pd.DataFrame,
+                 data: pd.DataFrame,
                  rho_var: float = 1,
                  alpha_var: float = 1,
                  lambda_var: float = 1,
@@ -88,7 +89,7 @@ class Shopper:
         """Intialises Shopper instance.
 
         Args:
-            X (Pandas DataFrame): 
+            data (Pandas DataFrame): 
                 Observed trips data (number of trips by 4).
                 DataFrame with columns: user_id, item_id, session_id, and price.
 
@@ -122,17 +123,19 @@ class Shopper:
             beta_shape (float): 
                 Prior shape over beta_c; defaults to 100.
         """
+        # Set data
+        self.data = data
         # Number of observations
-        N_obs = len(X)
+        N_obs = len(data)
         # Order
-        order = X.groupby(['user_id', 'session_id'])['item_id']\
+        order = data.groupby(['user_id', 'session_id'])['item_id']\
                  .cumcount()
         # Scaling factor
-        X.loc[:, 'sf'] = order.apply(lambda x: 1 / x if x > 0 else 0)
+        data.loc[:, 'sf'] = order.apply(lambda x: 1 / x if x > 0 else 0)
         # Number of items
-        C = X['item_id'].nunique()
+        C = data['item_id'].nunique()
         # Number of users
-        U = X['user_id'].nunique()
+        U = data['user_id'].nunique()
         # Trips (user_id, session_id)
         trips = X.set_index(['user_id', 'session_id'])\
                  .index\
@@ -207,31 +210,92 @@ class Shopper:
                                           n_steps=N_obs)
 
             # Mean utility per basket per item
-            Psi_tci = psi_tc + rho_c[items_idx]*phi_ti*X['sf']
+            Psi_tci = psi_tc + rho_c[items_idx]*phi_ti*data['sf']
 
             # Set shopper to model attribute
             self.model = shopper
 
         logging.info("Done building the Shopper model.")
 
-    def fit(self, draws, random_seed):
+    def fit(self,
+            draws,
+            random_seed=42,
+            return_inferencedata=True):
         """Estimate parameters using Bayesian inference.
+        Returns ShopperResults instance.
 
         Args:
             draws (int): 
                 Number of draws.
 
+            random_seed (int): 
+                Random seed; defaults to 42.
+
+            return_inferencedata (bool): 
+                If True, returns arviz.InferenceData object.
+                Otherwise, returns MultiTrace.InferenceData object.
+                Defaults to True.
+
         Methods supported:
 
         - MCMC -- Monte Carlo Markov Chains
-        - ADVI -- Automatic Differentiation Variational Inference
 
         """
         model = self.model
         with model:
-            trace = sample(draws=draws,
-                           random_seed=random_seed)
+            res = pm.sample(draws=draws,
+                            random_seed=random_seed,
+                            return_inferencedata=return_inferencedata)
+        return ShopperResults(res)
 
+
+class ShopperResults:
+    """Results class for a fitted Shopper model.
+
+    Attributes:
+        res (arviz.InferenceData or MultiTrace.InferenceData): 
+            PyMC3 sampling results object.
+    """
+    def __init__(self, res):
+        self.res = res
+
+    def trace_plot(self):
+        """Returns trace plots.
+
+        Requires the Shopper model to be fitted with
+        MCMC sampling.
+        """
+        return az.plot_trace(self.res)
+    
+    def rhat(self):
+        """Returns the Gelman-Rubin statistic.
+        
+        Requires the Shopper model to be fitted with
+        MCMC sampling.
+        """
+        return az.summary(self.res)
+
+    def energy_plot(self):
+        """Returns energy plot to check for convergence.
+        Commonly used for high-dimensional models where it
+        is too cumbersome to examine all parameter's traces.
+
+        Requires the Shopper model to be fitted with
+        MCMC sampling.
+        """
+        return az.plot_energy(self.res)
+
+    def predict(self, X):
+        """Returns predicted probabilities for
+        samples in X.
+        """
+        pass
+
+    def score(self, X, y):
+        """Returns the mean accuracy on the given test data
+        and labels.
+        """
+        pass
 
 if __name__ == "__main__":
     pass
