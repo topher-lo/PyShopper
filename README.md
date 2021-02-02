@@ -20,10 +20,11 @@ data = shopper.load_data('data/train.tsv',
 model = shopper.Shopper(data)
 
 # Fit model
-res = model.fit(draws=500, random_seed=42)
+res = model.fit(draws=10000, random_seed=42)
 ```
 
 ## Roadmap
 - Implement baseline Shopper without seasonality effects (TBD)
 - Add random sampling of unordered baskets (TBD)
 - Add seasonality effects (TBD)
+- Add thinking ahead procedure (TBD)
