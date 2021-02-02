@@ -13,7 +13,7 @@ import theano
 import pandas as pd
 import pymc3 as pm
 
-import theano.tensor as T
+import theano.tensor as tt
 
 from sklearn import preprocessing
 
@@ -76,6 +76,8 @@ class Shopper:
     """
     def __init__(self,
                  data: pd.DataFrame,
+                 K: int = 50,
+                 price_dim: int = 10,
                  rho_var: float = 1,
                  alpha_var: float = 1,
                  lambda_var: float = 1,
@@ -92,6 +94,14 @@ class Shopper:
             data (Pandas DataFrame): 
                 Observed trips data (number of trips by 4).
                 DataFrame with columns: user_id, item_id, session_id, and price.
+
+            K (int): 
+                Number of latent factors for alpha_c, rho_c, and theta_u;
+                defaults to 50.
+
+            price_dim (int): 
+                Number of latent factors for price vectors gamma_u and beta_c;
+                defaults to 10.
 
             rho_var (float): 
                 Prior variance over rho_c; defaults to 1.
@@ -153,22 +163,23 @@ class Shopper:
 
         logging.info('Building the Shopper model...')
         with pm.Model() as shopper:
-            # Priors:
+            # Latent variables
 
             # per item interaction coefficients
             rho_c = pm.Normal('rho_c',
                               mu=0,
                               sigma=rho_var,
-                              shape=C)
+                              shape=(C, K))
             # per item attributes
             alpha_c = pm.Normal('alpha_c',
                                 mu=0,
                                 sigma=alpha_var,
-                                shape=C)
+                                shape=(C, K))
             # per user preferences
             theta_u = pm.Normal('theta_u',
                                 mu=0,
-                                sigma=theta_var)
+                                sigma=theta_var,
+                                shape=(U, K))
             # per item popularities
             lambda_c = pm.Normal('lambda_c',
                                  mu=0,
@@ -178,18 +189,19 @@ class Shopper:
             gamma_u = pm.Gamma('gamma_u',
                                beta=gamma_rate,
                                alpha=gamma_shape,
-                               shape=U)
+                               shape=(U, price_dim))
             # per item price sensitivities
             beta_c = pm.Gamma('beta_c',
                               beta=beta_rate,
                               alpha=beta_shape,
-                              shape=C)
+                              shape=(C, price_dim))
 
             # Baseline utility per item per user:
             # Item popularity + Consumer Preferences - Price Effects
+            # Note: variation comes from customer index and item prices
             psi_tc = lambda_c[items_idx] +\
                 theta_u[users_idx]*alpha_c[items_idx] -\
-                gamma_u[users_idx]*beta_c[items_idx]*np.log(X['price'])
+                gamma_u[users_idx]*beta_c[items_idx]*np.log(data['price'])
 
             # sum^{i-1}_j [alpha_{y_tj}]
             def basket_items_attr(idx, alpha_c, order):
@@ -203,7 +215,7 @@ class Shopper:
 
             phi_0 = theano.shared(0)  # phi_ti initial value
             phi_ti, updates = theano.scan(fn=basket_items_attr,
-                                          sequences=[T.arange(N_obs),
+                                          sequences=[tt.arange(N_obs),
                                                      alpha_c,
                                                      order],
                                           outputs_info=phi_0,
@@ -212,13 +224,19 @@ class Shopper:
             # Mean utility per basket per item
             Psi_tci = psi_tc + rho_c[items_idx]*phi_ti*data['sf']
 
-            # Set shopper to model attribute
-            self.model = shopper
+            # Softmax likelihood p(y_ti = c | y_t0, y_t1, ..., y_ti-1)
+            p = pm.Deterministic('p', tt.nnet.softmax(Psi_tci))
+            labels = preprocessing.LabelBinarizer()\
+                                  .fit_transform(data['item_id'])
+            y = pm.Categorical('y', p=p, observed=np.bool8(labels))
 
         logging.info("Done building the Shopper model.")
+        # Set shopper to model attribute
+        self.model = shopper
 
     def fit(self,
             draws,
+            step=None,
             random_seed=42,
             return_inferencedata=True):
         """Estimate parameters using Bayesian inference.
@@ -227,6 +245,10 @@ class Shopper:
         Args:
             draws (int): 
                 Number of draws.
+
+            step (function or iterable of functions): 
+                A step function or collection of functions;
+                defaults None (which uses the NUTS step method).
 
             random_seed (int): 
                 Random seed; defaults to 42.
@@ -244,6 +266,7 @@ class Shopper:
         model = self.model
         with model:
             res = pm.sample(draws=draws,
+                            step=step,
                             random_seed=random_seed,
                             return_inferencedata=return_inferencedata)
         return ShopperResults(res)
@@ -266,10 +289,10 @@ class ShopperResults:
         MCMC sampling.
         """
         return az.plot_trace(self.res)
-    
+
     def rhat(self):
         """Returns the Gelman-Rubin statistic.
-        
+
         Requires the Shopper model to be fitted with
         MCMC sampling.
         """
@@ -296,6 +319,7 @@ class ShopperResults:
         and labels.
         """
         pass
+
 
 if __name__ == "__main__":
     pass
