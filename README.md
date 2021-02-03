@@ -5,6 +5,12 @@ PyShopper is a Python implementation of Shopper, a probablistic model of shoppin
 ## Project Status
 This mini-project is still in active development. The code is currently NOT usable. The Shopper model has been specified, but I have yet to test against any dataset.
 
+## To Do
+- Implement baseline Shopper without seasonality effects (Expected completion: 2/7/2021)
+- Run baseline Shopper with MCMC sampling on simulated data
+- Implement variational inference for Shopper using PyMC3's ADVI API
+- Run baseline Shopper with ADVI on simulated data
+
 ## Background
 The goals of this mini-project were to:
 - Push the boundaries of my understanding of PyMC3
@@ -27,7 +33,6 @@ res = model.fit(draws=10000, random_seed=42)
 ```
 
 ## Roadmap
-- Implement baseline Shopper without seasonality effects (TBD)
 - Add random sampling of unordered baskets (TBD)
 - Add seasonality effects (TBD)
 - Add thinking ahead procedure (TBD)
