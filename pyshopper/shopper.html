@@ -262,7 +262,9 @@ class Shopper:
 
             # Softmax likelihood p(y_ti = c | y_t0, y_t1, ..., y_ti-1)
             p = pm.Deterministic(&#39;p&#39;, tt.nnet.softmax(Psi_tci))
-            y = pm.Categorical(&#39;y&#39;, p=p, observed=data[&#39;item_id&#39;])
+            labels = preprocessing.LabelBinarizer()\
+                                  .fit_transform(data[&#39;item_id&#39;])
+            y = pm.Categorical(&#39;y&#39;, p=p, observed=np.bool8(labels))
 
         logging.info(&#34;Done building the Shopper model.&#34;)
         # Set shopper to model attribute
@@ -323,10 +325,10 @@ class ShopperResults:
         MCMC sampling.
         &#34;&#34;&#34;
         return az.plot_trace(self.res)
-    
+
     def rhat(self):
         &#34;&#34;&#34;Returns the Gelman-Rubin statistic.
-        
+
         Requires the Shopper model to be fitted with
         MCMC sampling.
         &#34;&#34;&#34;
@@ -648,7 +650,9 @@ defaults to 10.</dd>
 
             # Softmax likelihood p(y_ti = c | y_t0, y_t1, ..., y_ti-1)
             p = pm.Deterministic(&#39;p&#39;, tt.nnet.softmax(Psi_tci))
-            y = pm.Categorical(&#39;y&#39;, p=p, observed=data[&#39;item_id&#39;])
+            labels = preprocessing.LabelBinarizer()\
+                                  .fit_transform(data[&#39;item_id&#39;])
+            y = pm.Categorical(&#39;y&#39;, p=p, observed=np.bool8(labels))
 
         logging.info(&#34;Done building the Shopper model.&#34;)
         # Set shopper to model attribute
@@ -793,10 +797,10 @@ Defaults to True.</dd>
         MCMC sampling.
         &#34;&#34;&#34;
         return az.plot_trace(self.res)
-    
+
     def rhat(self):
         &#34;&#34;&#34;Returns the Gelman-Rubin statistic.
-        
+
         Requires the Shopper model to be fitted with
         MCMC sampling.
         &#34;&#34;&#34;
@@ -880,7 +884,7 @@ MCMC sampling.</p></div>
 </summary>
 <pre><code class="python">def rhat(self):
     &#34;&#34;&#34;Returns the Gelman-Rubin statistic.
-    
+
     Requires the Shopper model to be fitted with
     MCMC sampling.
     &#34;&#34;&#34;
