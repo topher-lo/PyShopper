@@ -2,6 +2,9 @@
 PyShopper is a Python implementation of Shopper, a probablistic model of shopping baskets, from [the paper](https://arxiv.org/abs/1711.03560 "Arxiv paper"):
 + Francisco J. R. Ruiz, Susan Athey, David M. Blei. SHOPPER: A Probabilistic Model of Consumer Choice with Substitutes and Complements. ArXiv 1711.03560. 2017.
 
+## Project Status
+This mini-project is still in active development. The code is currently NOT usable. The Shopper model has been specified, but I have yet to test against any dataset.
+
 ## Background
 The goals of this mini-project were to:
 - Push the boundaries of my understanding of PyMC3
