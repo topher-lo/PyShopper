@@ -90,7 +90,7 @@ def load_data(data_path: str = DATA_PATH, prices_path: str = PRICES_PATH):
                          header=None,
                          names=[&#39;item_id&#39;, &#39;session_id&#39;, &#39;price&#39;],
                          sep=&#39;\t&#39;)
-    data = trips.join(prices, on=[&#39;item_id&#39;, &#39;session_id&#39;])
+    data = pd.merge(trips, prices, on=[&#39;item_id&#39;, &#39;session_id&#39;])
     return data
 
 
@@ -175,26 +175,20 @@ class Shopper:
         N_obs = len(data)
         # Order
         order = data.groupby([&#39;user_id&#39;, &#39;session_id&#39;])[&#39;item_id&#39;]\
-                 .cumcount()
+                    .cumcount()
         # Scaling factor
-        data.loc[:, &#39;sf&#39;] = order.apply(lambda x: 1 / x if x &gt; 0 else 0)
+        sf = order.apply(lambda x: 1 / x if x &gt; 0 else 0)
         # Number of items
         C = data[&#39;item_id&#39;].nunique()
         # Number of users
         U = data[&#39;user_id&#39;].nunique()
-        # Trips (user_id, session_id)
-        trips = X.set_index([&#39;user_id&#39;, &#39;session_id&#39;])\
-                 .index\
-                 .to_flat_index()\
-                 .to_frame()\
-                 .astype(str)
-        trips_idx = preprocessing.LabelEncoder()\
-                                 .fit_transform(trips)
+        # Observations index
+        obs_idx = preprocessing.LabelEncoder().fit_transform(data.index)
         # Items
-        items = X[&#39;item_id&#39;]
+        items = data[&#39;item_id&#39;]
         items_idx = preprocessing.LabelEncoder().fit_transform(items)
         # Users
-        users = X[&#39;user_id&#39;]
+        users = data[&#39;user_id&#39;]
         users_idx = preprocessing.LabelEncoder().fit_transform(users)
 
         logging.info(&#39;Building the Shopper model...&#39;)
@@ -220,7 +214,7 @@ class Shopper:
             lambda_c = pm.Normal(&#39;lambda_c&#39;,
                                  mu=0,
                                  sigma=lambda_var,
-                                 shape=T)
+                                 shape=C)
             # per user price sensitivities
             gamma_u = pm.Gamma(&#39;gamma_u&#39;,
                                beta=gamma_rate,
@@ -235,36 +229,41 @@ class Shopper:
             # Baseline utility per item per user:
             # Item popularity + Consumer Preferences - Price Effects
             # Note: variation comes from customer index and item prices
+            psi_tc = tt.vector(&#39;psi_tc&#39;)
             psi_tc = lambda_c[items_idx] +\
-                theta_u[users_idx]*alpha_c[items_idx] -\
-                gamma_u[users_idx]*beta_c[items_idx]*np.log(data[&#39;price&#39;])
+                pm.math.dot(theta_u[users_idx], alpha_c[items_idx].T) -\
+                pm.math.dot(gamma_u[users_idx], beta_c[items_idx].T) *\
+                np.log(data[&#39;price&#39;])
 
             # sum^{i-1}_j [alpha_{y_tj}]
-            def basket_items_attr(idx, alpha_c, order):
+            def basket_items_attr(omega_prev, idx, alpha_c, order):
                 # If first item in basket
-                if order[idx] == 0:
+                if tt.eq(order[idx], 0):
                     # No price-attributes interaction effects
-                    phi_ti = 0
+                    omega_ti = tt.zeros(K)
                 else:
-                    phi_ti += alpha_c[idx - 1]
-                return phi_ti
+                    omega_ti = omega_prev + alpha_c[idx-1]
+                return omega_ti
 
-            phi_0 = theano.shared(0)  # phi_ti initial value
-            phi_ti, updates = theano.scan(fn=basket_items_attr,
-                                          sequences=[tt.arange(N_obs),
-                                                     alpha_c,
-                                                     order],
-                                          outputs_info=phi_0,
-                                          n_steps=N_obs)
-
+            # omega_ti initial value
+            omega_0 = tt.zeros(K)
+            omega_ti = tt.vector(&#39;omega_ti&#39;)
+            omega_ti, updates = theano.scan(fn=basket_items_attr,
+                                            outputs_info=omega_0,
+                                            non_sequences=[tt.arange(N_obs),
+                                                           alpha_c,
+                                                           order],
+                                            n_steps=N_obs)
             # Mean utility per basket per item
-            Psi_tci = psi_tc + rho_c[items_idx]*phi_ti*data[&#39;sf&#39;]
+            Psi_tci = tt.vector(&#39;Psi_tci&#39;)
+            Psi_tci = psi_tc + pm.math.dot(rho_c[items_idx],
+                                           omega_ti[obs_idx-1].T)*sf[obs_idx]
 
             # Softmax likelihood p(y_ti = c | y_t0, y_t1, ..., y_ti-1)
             p = pm.Deterministic(&#39;p&#39;, tt.nnet.softmax(Psi_tci))
-            labels = preprocessing.LabelBinarizer()\
+            labels = preprocessing.LabelEncoder()\
                                   .fit_transform(data[&#39;item_id&#39;])
-            y = pm.Categorical(&#39;y&#39;, p=p, observed=np.bool8(labels))
+            y = pm.Categorical(&#39;y&#39;, p=p, observed=labels)
 
         logging.info(&#34;Done building the Shopper model.&#34;)
         # Set shopper to model attribute
@@ -273,8 +272,8 @@ class Shopper:
     def fit(self,
             draws,
             step=None,
-            random_seed=42,
-            return_inferencedata=True):
+            return_inferencedata=True,
+            random_seed=42):
         &#34;&#34;&#34;Estimate parameters using Bayesian inference.
         Returns ShopperResults instance.
 
@@ -286,13 +285,13 @@ class Shopper:
                 A step function or collection of functions;
                 defaults None (which uses the NUTS step method).
 
-            random_seed (int): 
-                Random seed; defaults to 42.
-
             return_inferencedata (bool): 
                 If True, returns arviz.InferenceData object.
                 Otherwise, returns MultiTrace.InferenceData object.
                 Defaults to True.
+
+            random_seed (int): 
+                Random seed; defaults to 42.
 
         Methods supported:
 
@@ -303,8 +302,8 @@ class Shopper:
         with model:
             res = pm.sample(draws=draws,
                             step=step,
-                            random_seed=random_seed,
-                            return_inferencedata=return_inferencedata)
+                            return_inferencedata=True,
+                            random_seed=random_seed)
         return ShopperResults(res)
 
 
@@ -319,7 +318,7 @@ class ShopperResults:
         self.res = res
 
     def trace_plot(self):
-        &#34;&#34;&#34;Returns trace plots.
+        &#34;&#34;&#34;Returns the trace plot.
 
         Requires the Shopper model to be fitted with
         MCMC sampling.
@@ -419,7 +418,7 @@ Each row represents the price per item per session.</dd>
                          header=None,
                          names=[&#39;item_id&#39;, &#39;session_id&#39;, &#39;price&#39;],
                          sep=&#39;\t&#39;)
-    data = trips.join(prices, on=[&#39;item_id&#39;, &#39;session_id&#39;])
+    data = pd.merge(trips, prices, on=[&#39;item_id&#39;, &#39;session_id&#39;])
     return data</code></pre>
 </details>
 </dd>
@@ -563,26 +562,20 @@ defaults to 10.</dd>
         N_obs = len(data)
         # Order
         order = data.groupby([&#39;user_id&#39;, &#39;session_id&#39;])[&#39;item_id&#39;]\
-                 .cumcount()
+                    .cumcount()
         # Scaling factor
-        data.loc[:, &#39;sf&#39;] = order.apply(lambda x: 1 / x if x &gt; 0 else 0)
+        sf = order.apply(lambda x: 1 / x if x &gt; 0 else 0)
         # Number of items
         C = data[&#39;item_id&#39;].nunique()
         # Number of users
         U = data[&#39;user_id&#39;].nunique()
-        # Trips (user_id, session_id)
-        trips = X.set_index([&#39;user_id&#39;, &#39;session_id&#39;])\
-                 .index\
-                 .to_flat_index()\
-                 .to_frame()\
-                 .astype(str)
-        trips_idx = preprocessing.LabelEncoder()\
-                                 .fit_transform(trips)
+        # Observations index
+        obs_idx = preprocessing.LabelEncoder().fit_transform(data.index)
         # Items
-        items = X[&#39;item_id&#39;]
+        items = data[&#39;item_id&#39;]
         items_idx = preprocessing.LabelEncoder().fit_transform(items)
         # Users
-        users = X[&#39;user_id&#39;]
+        users = data[&#39;user_id&#39;]
         users_idx = preprocessing.LabelEncoder().fit_transform(users)
 
         logging.info(&#39;Building the Shopper model...&#39;)
@@ -608,7 +601,7 @@ defaults to 10.</dd>
             lambda_c = pm.Normal(&#39;lambda_c&#39;,
                                  mu=0,
                                  sigma=lambda_var,
-                                 shape=T)
+                                 shape=C)
             # per user price sensitivities
             gamma_u = pm.Gamma(&#39;gamma_u&#39;,
                                beta=gamma_rate,
@@ -623,36 +616,41 @@ defaults to 10.</dd>
             # Baseline utility per item per user:
             # Item popularity + Consumer Preferences - Price Effects
             # Note: variation comes from customer index and item prices
+            psi_tc = tt.vector(&#39;psi_tc&#39;)
             psi_tc = lambda_c[items_idx] +\
-                theta_u[users_idx]*alpha_c[items_idx] -\
-                gamma_u[users_idx]*beta_c[items_idx]*np.log(data[&#39;price&#39;])
+                pm.math.dot(theta_u[users_idx], alpha_c[items_idx].T) -\
+                pm.math.dot(gamma_u[users_idx], beta_c[items_idx].T) *\
+                np.log(data[&#39;price&#39;])
 
             # sum^{i-1}_j [alpha_{y_tj}]
-            def basket_items_attr(idx, alpha_c, order):
+            def basket_items_attr(omega_prev, idx, alpha_c, order):
                 # If first item in basket
-                if order[idx] == 0:
+                if tt.eq(order[idx], 0):
                     # No price-attributes interaction effects
-                    phi_ti = 0
+                    omega_ti = tt.zeros(K)
                 else:
-                    phi_ti += alpha_c[idx - 1]
-                return phi_ti
+                    omega_ti = omega_prev + alpha_c[idx-1]
+                return omega_ti
 
-            phi_0 = theano.shared(0)  # phi_ti initial value
-            phi_ti, updates = theano.scan(fn=basket_items_attr,
-                                          sequences=[tt.arange(N_obs),
-                                                     alpha_c,
-                                                     order],
-                                          outputs_info=phi_0,
-                                          n_steps=N_obs)
-
+            # omega_ti initial value
+            omega_0 = tt.zeros(K)
+            omega_ti = tt.vector(&#39;omega_ti&#39;)
+            omega_ti, updates = theano.scan(fn=basket_items_attr,
+                                            outputs_info=omega_0,
+                                            non_sequences=[tt.arange(N_obs),
+                                                           alpha_c,
+                                                           order],
+                                            n_steps=N_obs)
             # Mean utility per basket per item
-            Psi_tci = psi_tc + rho_c[items_idx]*phi_ti*data[&#39;sf&#39;]
+            Psi_tci = tt.vector(&#39;Psi_tci&#39;)
+            Psi_tci = psi_tc + pm.math.dot(rho_c[items_idx],
+                                           omega_ti[obs_idx-1].T)*sf[obs_idx]
 
             # Softmax likelihood p(y_ti = c | y_t0, y_t1, ..., y_ti-1)
             p = pm.Deterministic(&#39;p&#39;, tt.nnet.softmax(Psi_tci))
-            labels = preprocessing.LabelBinarizer()\
+            labels = preprocessing.LabelEncoder()\
                                   .fit_transform(data[&#39;item_id&#39;])
-            y = pm.Categorical(&#39;y&#39;, p=p, observed=np.bool8(labels))
+            y = pm.Categorical(&#39;y&#39;, p=p, observed=labels)
 
         logging.info(&#34;Done building the Shopper model.&#34;)
         # Set shopper to model attribute
@@ -661,8 +659,8 @@ defaults to 10.</dd>
     def fit(self,
             draws,
             step=None,
-            random_seed=42,
-            return_inferencedata=True):
+            return_inferencedata=True,
+            random_seed=42):
         &#34;&#34;&#34;Estimate parameters using Bayesian inference.
         Returns ShopperResults instance.
 
@@ -674,13 +672,13 @@ defaults to 10.</dd>
                 A step function or collection of functions;
                 defaults None (which uses the NUTS step method).
 
-            random_seed (int): 
-                Random seed; defaults to 42.
-
             return_inferencedata (bool): 
                 If True, returns arviz.InferenceData object.
                 Otherwise, returns MultiTrace.InferenceData object.
                 Defaults to True.
+
+            random_seed (int): 
+                Random seed; defaults to 42.
 
         Methods supported:
 
@@ -691,14 +689,14 @@ defaults to 10.</dd>
         with model:
             res = pm.sample(draws=draws,
                             step=step,
-                            random_seed=random_seed,
-                            return_inferencedata=return_inferencedata)
+                            return_inferencedata=True,
+                            random_seed=random_seed)
         return ShopperResults(res)</code></pre>
 </details>
 <h3>Methods</h3>
 <dl>
 <dt id="pyshopper.shopper.Shopper.fit"><code class="name flex">
-<span>def <span class="ident">fit</span></span>(<span>self, draws, step=None, random_seed=42, return_inferencedata=True)</span>
+<span>def <span class="ident">fit</span></span>(<span>self, draws, step=None, return_inferencedata=True, random_seed=42)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Estimate parameters using Bayesian inference.
@@ -710,12 +708,12 @@ Returns ShopperResults instance.</p>
 <dt><strong><code>step</code></strong> :&ensp;<code>function</code> or <code>iterable</code> of <code>functions</code></dt>
 <dd>A step function or collection of functions;
 defaults None (which uses the NUTS step method).</dd>
-<dt><strong><code>random_seed</code></strong> :&ensp;<code>int</code></dt>
-<dd>Random seed; defaults to 42.</dd>
 <dt><strong><code>return_inferencedata</code></strong> :&ensp;<code>bool</code></dt>
 <dd>If True, returns arviz.InferenceData object.
 Otherwise, returns MultiTrace.InferenceData object.
 Defaults to True.</dd>
+<dt><strong><code>random_seed</code></strong> :&ensp;<code>int</code></dt>
+<dd>Random seed; defaults to 42.</dd>
 </dl>
 <p>Methods supported:</p>
 <ul>
@@ -728,8 +726,8 @@ Defaults to True.</dd>
 <pre><code class="python">def fit(self,
         draws,
         step=None,
-        random_seed=42,
-        return_inferencedata=True):
+        return_inferencedata=True,
+        random_seed=42):
     &#34;&#34;&#34;Estimate parameters using Bayesian inference.
     Returns ShopperResults instance.
 
@@ -741,13 +739,13 @@ Defaults to True.</dd>
             A step function or collection of functions;
             defaults None (which uses the NUTS step method).
 
-        random_seed (int): 
-            Random seed; defaults to 42.
-
         return_inferencedata (bool): 
             If True, returns arviz.InferenceData object.
             Otherwise, returns MultiTrace.InferenceData object.
             Defaults to True.
+
+        random_seed (int): 
+            Random seed; defaults to 42.
 
     Methods supported:
 
@@ -758,8 +756,8 @@ Defaults to True.</dd>
     with model:
         res = pm.sample(draws=draws,
                         step=step,
-                        random_seed=random_seed,
-                        return_inferencedata=return_inferencedata)
+                        return_inferencedata=True,
+                        random_seed=random_seed)
     return ShopperResults(res)</code></pre>
 </details>
 </dd>
@@ -791,7 +789,7 @@ Defaults to True.</dd>
         self.res = res
 
     def trace_plot(self):
-        &#34;&#34;&#34;Returns trace plots.
+        &#34;&#34;&#34;Returns the trace plot.
 
         Requires the Shopper model to be fitted with
         MCMC sampling.
@@ -912,7 +910,7 @@ and labels.</p></div>
 <span>def <span class="ident">trace_plot</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<div class="desc"><p>Returns trace plots.</p>
+<div class="desc"><p>Returns the trace plot.</p>
 <p>Requires the Shopper model to be fitted with
 MCMC sampling.</p></div>
 <details class="source">
@@ -920,7 +918,7 @@ MCMC sampling.</p></div>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def trace_plot(self):
-    &#34;&#34;&#34;Returns trace plots.
+    &#34;&#34;&#34;Returns the trace plot.
 
     Requires the Shopper model to be fitted with
     MCMC sampling.
