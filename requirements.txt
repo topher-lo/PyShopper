@@ -1,7 +1,9 @@
 arviz
+cython
 numpy
 pandas
 theano
 pymc3
 scikit-learn
 pdoc3
+requests
