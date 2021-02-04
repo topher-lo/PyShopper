@@ -7,7 +7,7 @@ PyShopper is a Python implementation of Shopper, a probablistic model of shoppin
 [![Open In nbviewer](https://warehouse-camo.ingress.cmh1.psfhosted.org/b76644f44625d8876b279659d108c1e5334fd8b3/68747470733a2f2f696d672e736869656c64732e696f2f62616467652f76696577253230696e2d6e627669657765722d6f72616e6765)](https://nbviewer.jupyter.org/github/topher-lo/PyShopper/blob/main/example.ipynb)
 
 ## Project Status
-- This mini-project is currently in active development. 
+- This mini-project is under active development. 
 - The code is currently NOT usable. I've specified the Shopper model in PyMC3 but it is not optimized.
 - PyShopper code has only been run on a dataset with 100 observed trips (~300 observations). 
 - Inference via NUTS MCMC sampling seems to converge in this very limited sample. 
