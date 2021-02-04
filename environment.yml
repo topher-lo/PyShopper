@@ -3,6 +3,9 @@ channels:
   - defaults
 dependencies:
   - arviz
+  - cython
+  - nb_conda_kernels
+  - notebook
   - numpy
   - pandas
   - pip
@@ -10,3 +13,4 @@ dependencies:
   - pymc3
   - scikit-learn
   - pdoc3
+  - requests
