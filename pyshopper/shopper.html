@@ -317,6 +317,11 @@ class ShopperResults:
     def __init__(self, res):
         self.res = res
 
+    def summary(self):
+        &#34;&#34;&#34;Returns text-based output of common posterior statistics.
+        &#34;&#34;&#34;
+        return az.summary(self.res)
+
     def trace_plot(self):
         &#34;&#34;&#34;Returns the trace plot.
 
@@ -788,6 +793,11 @@ Defaults to True.</dd>
     def __init__(self, res):
         self.res = res
 
+    def summary(self):
+        &#34;&#34;&#34;Returns text-based output of common posterior statistics.
+        &#34;&#34;&#34;
+        return az.summary(self.res)
+
     def trace_plot(self):
         &#34;&#34;&#34;Returns the trace plot.
 
@@ -906,6 +916,21 @@ and labels.</p></div>
     pass</code></pre>
 </details>
 </dd>
+<dt id="pyshopper.shopper.ShopperResults.summary"><code class="name flex">
+<span>def <span class="ident">summary</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Returns text-based output of common posterior statistics.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def summary(self):
+    &#34;&#34;&#34;Returns text-based output of common posterior statistics.
+    &#34;&#34;&#34;
+    return az.summary(self.res)</code></pre>
+</details>
+</dd>
 <dt id="pyshopper.shopper.ShopperResults.trace_plot"><code class="name flex">
 <span>def <span class="ident">trace_plot</span></span>(<span>self)</span>
 </code></dt>
@@ -957,11 +982,12 @@ MCMC sampling.</p></div>
 </li>
 <li>
 <h4><code><a title="pyshopper.shopper.ShopperResults" href="#pyshopper.shopper.ShopperResults">ShopperResults</a></code></h4>
-<ul class="">
+<ul class="two-column">
 <li><code><a title="pyshopper.shopper.ShopperResults.energy_plot" href="#pyshopper.shopper.ShopperResults.energy_plot">energy_plot</a></code></li>
 <li><code><a title="pyshopper.shopper.ShopperResults.predict" href="#pyshopper.shopper.ShopperResults.predict">predict</a></code></li>
 <li><code><a title="pyshopper.shopper.ShopperResults.rhat" href="#pyshopper.shopper.ShopperResults.rhat">rhat</a></code></li>
 <li><code><a title="pyshopper.shopper.ShopperResults.score" href="#pyshopper.shopper.ShopperResults.score">score</a></code></li>
+<li><code><a title="pyshopper.shopper.ShopperResults.summary" href="#pyshopper.shopper.ShopperResults.summary">summary</a></code></li>
 <li><code><a title="pyshopper.shopper.ShopperResults.trace_plot" href="#pyshopper.shopper.ShopperResults.trace_plot">trace_plot</a></code></li>
 </ul>
 </li>
