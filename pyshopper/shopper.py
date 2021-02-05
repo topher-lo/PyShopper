@@ -281,6 +281,11 @@ class ShopperResults:
     def __init__(self, res):
         self.res = res
 
+    def summary(self):
+        """Returns text-based output of common posterior statistics.
+        """
+        return az.summary(self.res)
+
     def trace_plot(self):
         """Returns the trace plot.
 

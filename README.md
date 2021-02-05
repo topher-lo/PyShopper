@@ -12,8 +12,9 @@ PyShopper is a Python implementation of Shopper, a probablistic model of shoppin
 - This mini-project is under active development. 
 - The code is currently NOT usable. I've specified the Shopper model in PyMC3 but it is not optimized.
 - PyShopper code has only been run on a dataset with 100 observed trips (~300 observations). 
+- Depending on your RAM, I do not know whether the code is memory efficient enough for a larger dataset. 
 - Inference via NUTS MCMC sampling seems to converge in this very limited sample. 
-- Sampling, however, is very slow and takes over 5 hours to complete on my T590 ThinkPad.
+- Sampling is very slow and takes over 5 hours to complete on my T590 ThinkPad.
 
 ## Background
 The goals of this mini-project were to:
@@ -46,6 +47,9 @@ res = model.fit(draws=1000, random_seed=42)
 
 # Return trace plot
 res.trace_plot()
+
+# Return summary of common posterior statistics
+res.summary()
 ```
 
 ## To Do
