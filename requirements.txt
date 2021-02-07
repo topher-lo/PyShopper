@@ -5,5 +5,6 @@ pandas
 theano
 pymc3
 scikit-learn
+seaborn
 pdoc3
 requests

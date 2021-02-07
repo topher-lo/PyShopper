@@ -8,9 +8,10 @@ dependencies:
   - notebook
   - numpy
   - pandas
-  - pip
-  - theano
-  - pymc3
-  - scikit-learn
   - pdoc3
+  - pip
+  - pymc3
   - requests
+  - scikit-learn
+  - seaborn
+  - theano

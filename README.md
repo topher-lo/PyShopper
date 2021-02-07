@@ -24,10 +24,11 @@ The goals of this mini-project were to:
 
 ## Install
 PyShopper depends on the following packages:
-- `pandas`
-- `numpy`
-- `pymc3 >= 3.10`
 - `arviz`
+- `numpy`
+- `pandas`
+- `pymc3 >= 3.10`
+- `seaborn`
 - `scikit-learn`
 - `theano`
 

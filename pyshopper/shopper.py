@@ -12,10 +12,14 @@ import numpy as np
 import theano
 import pandas as pd
 import pymc3 as pm
+import seaborn as sns
 
 import theano.tensor as tt
 
 from sklearn import preprocessing
+from matplotlib import pyplot as plt
+
+from pymc3.variational.callbacks import CheckParametersConvergence
 
 
 # Logging
@@ -93,7 +97,8 @@ class Shopper:
         Args:
             data (Pandas DataFrame): 
                 Observed trips data (number of trips by 4).
-                DataFrame with columns: user_id, item_id, session_id, and price.
+                DataFrame with columns: user_id, item_id, session_id, 
+                and price.
 
             K (int): 
                 Number of latent factors for alpha_c, rho_c, and theta_u;
@@ -234,40 +239,54 @@ class Shopper:
         self.model = shopper
 
     def fit(self,
-            draws,
+            N,
+            method='ADVI',
             step=None,
+            diff='relative',
             return_inferencedata=True,
-            random_seed=42):
+            random_seed=42,
+            **kwargs):
         """Estimate parameters using Bayesian inference.
         Returns ShopperResults instance.
 
         Args:
-            draws (int): 
-                Number of draws.
+            N (int): 
+                Number of draws (MCMC) or iterations (ADVI).
 
-            step (function or iterable of functions): 
+            method (str): 
+              - MCMC -- Monte Carlo Markov Chains
+              - ADVI -- Automatic Differentiation Variational Inference
+
+            diff (str): 
+                Requires method to be ADVI. The difference type used
+                to check convergence in the mean of the ADVI approximation
+
+            step (function or iterable of functions):
+                Requires method to be MCMC.
                 A step function or collection of functions;
                 defaults None (which uses the NUTS step method).
 
             return_inferencedata (bool): 
+                Requires method to be MCMC.
                 If True, returns arviz.InferenceData object.
                 Otherwise, returns MultiTrace.InferenceData object.
                 Defaults to True.
 
             random_seed (int): 
                 Random seed; defaults to 42.
-
-        Methods supported:
-
-        - MCMC -- Monte Carlo Markov Chains
-
         """
         model = self.model
         with model:
-            res = pm.sample(draws=draws,
-                            step=step,
-                            return_inferencedata=True,
-                            random_seed=random_seed)
+            if method == 'ADVI':
+                callback = CheckParametersConvergence(diff=diff)
+                res = pm.fit(n=N,
+                             method='advi',
+                             callbacks=[callback])
+            else:
+                res = pm.sample(draws=N,
+                                step=step,
+                                return_inferencedata=True,
+                                random_seed=random_seed)
         return ShopperResults(res)
 
 
@@ -275,24 +294,41 @@ class ShopperResults:
     """Results class for a fitted Shopper model.
 
     Attributes:
-        res (arviz.InferenceData or MultiTrace.InferenceData): 
-            PyMC3 sampling results object.
+        res (PyMC3 results instance): 
+            If MCMC, then requires arviz.InferenceData or
+            MultiTrace.InferenceData. Else if ADVI, then
+            requires pymc3.variational.opvi.Approximation.
     """
     def __init__(self, res):
         self.res = res
 
-    def summary(self):
+    def summary(self, **kwargs):
         """Returns text-based output of common posterior statistics.
-        """
-        return az.summary(self.res)
 
-    def trace_plot(self):
+        Requires 'draws' (sample size to be drawn from posterior distribution)
+        to be set in kwargs if model was fitted with ADVI.
+        """
+        res = self.res
+        if type(res) == pm.variational.opvi.Approximation:
+            sample = res.sample(kwargs['draws'])
+            summary = az.summary(sample)
+        else:
+            summary = az.summary(res)
+        return summary
+
+    def trace_plot(self, **kwargs):
         """Returns the trace plot.
 
-        Requires the Shopper model to be fitted with
-        MCMC sampling.
+        Requires 'draws' (sample size to be drawn from posterior distribution)
+        to be set in kwargs if model was fitted with ADVI.
         """
-        return az.plot_trace(self.res)
+        res = self.res
+        if type(res) == pm.variational.opvi.Approximation:
+            sample = res.sample(draws=kwargs['draws'])
+            trace = az.plot_trace(sample)
+        else:
+            trace = az.plot_trace(res)
+        return trace
 
     def rhat(self):
         """Returns the Gelman-Rubin statistic.
@@ -311,6 +347,17 @@ class ShopperResults:
         MCMC sampling.
         """
         return az.plot_energy(self.res)
+
+    def elbo_plot(self):
+        """Returns trace plot of ADVI's objective function (ELBO).
+
+        Requires the Shopper model to be fitted with ADVI.
+        """
+        fig = plt.figure()
+        plt.plot(self.res.hist)
+        plt.ylabel('ELBO')
+        plt.xlabel('n iterations')
+        return fig
 
     def predict(self, X):
         """Returns predicted probabilities for
