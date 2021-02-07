@@ -312,9 +312,9 @@ class ShopperResults:
         to be set in kwargs if model was fitted with ADVI.
         """
         res = self.res
-        if type(res) == pm.variational.opvi.Approximation:
-            sample = res.sample(kwargs['draws'])
-            summary = az.summary(sample)
+        if 'variational' in str(type(res)):
+            trace = res.sample(kwargs['draws'])
+            summary = az.summary(trace, kind='stats')
         else:
             summary = az.summary(res)
         return summary
