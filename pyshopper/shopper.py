@@ -26,6 +26,9 @@ from pymc3.variational.callbacks import CheckParametersConvergence
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+# Set seaborn default theme
+sns.set_theme()
+
 # Global variables
 DATA_PATH = 'data/train.tsv'
 PRICES_PATH = 'data/prices.tsv'
