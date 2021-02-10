@@ -85,6 +85,7 @@ class Shopper:
                  data: pd.DataFrame,
                  K: int = 50,
                  price_dim: int = 10,
+                 price_dtype: str = 'float32',
                  rho_var: float = 1,
                  alpha_var: float = 1,
                  lambda_var: float = 1,
@@ -110,6 +111,9 @@ class Shopper:
             price_dim (int): 
                 Number of latent factors for price vectors gamma_u and beta_c;
                 defaults to 10.
+
+            price_dtype (str): 
+                The datatype used for prices; defaults to float32.
 
             rho_var (float): 
                 Prior variance over rho_c; defaults to 1.
@@ -150,18 +154,22 @@ class Shopper:
                     .cumcount()
         # Scaling factor
         sf = order.apply(lambda x: 1 / x if x > 0 else 0)
+        sf = sf.to_numpy(dtype='float32')
         # Number of items
         C = data['item_id'].nunique()
         # Number of users
         U = data['user_id'].nunique()
         # Observations index
         obs_idx = preprocessing.LabelEncoder().fit_transform(data.index)
+        obs_idx = obs_idx.astype('int32')
         # Items
         items = data['item_id']
         items_idx = preprocessing.LabelEncoder().fit_transform(items)
+        items_idx = items_idx.astype('int32')
         # Users
         users = data['user_id']
         users_idx = preprocessing.LabelEncoder().fit_transform(users)
+        users_idx = users_idx.astype('int32')
 
         logging.info('Building the Shopper model...')
         with pm.Model() as shopper:
@@ -171,32 +179,38 @@ class Shopper:
             rho_c = pm.Normal('rho_c',
                               mu=0,
                               sigma=rho_var,
-                              shape=(C, K))
+                              shape=(C, K),
+                              dtype='float32')
             # per item attributes
             alpha_c = pm.Normal('alpha_c',
                                 mu=0,
                                 sigma=alpha_var,
-                                shape=(C, K))
+                                shape=(C, K),
+                                dtype='float32')
             # per user preferences
             theta_u = pm.Normal('theta_u',
                                 mu=0,
                                 sigma=theta_var,
-                                shape=(U, K))
+                                shape=(U, K),
+                                dtype='float32')
             # per item popularities
             lambda_c = pm.Normal('lambda_c',
                                  mu=0,
                                  sigma=lambda_var,
-                                 shape=C)
+                                 shape=C,
+                                 dtype='float32')
             # per user price sensitivities
             gamma_u = pm.Gamma('gamma_u',
                                beta=gamma_rate,
                                alpha=gamma_shape,
-                               shape=(U, price_dim))
+                               shape=(U, price_dim),
+                               dtype='float32')
             # per item price sensitivities
             beta_c = pm.Gamma('beta_c',
                               beta=beta_rate,
                               alpha=beta_shape,
-                              shape=(C, price_dim))
+                              shape=(C, price_dim),
+                              dtype='float32')
 
             # Baseline utility per item per user:
             # Item popularity + Consumer Preferences - Price Effects
@@ -205,7 +219,7 @@ class Shopper:
             psi_tc = lambda_c[items_idx] +\
                 pm.math.dot(theta_u[users_idx], alpha_c[items_idx].T) -\
                 pm.math.dot(gamma_u[users_idx], beta_c[items_idx].T) *\
-                np.log(data['price'])
+                np.log(data['price']).astype(price_dtype)
 
             # sum^{i-1}_j [alpha_{y_tj}]
             def basket_items_attr(omega_prev, idx, alpha_c, order):
@@ -235,6 +249,7 @@ class Shopper:
             p = pm.Deterministic('p', tt.nnet.softmax(Psi_tci))
             labels = preprocessing.LabelEncoder()\
                                   .fit_transform(data['item_id'])
+            labels = labels.astype('int32')
             y = pm.Categorical('y', p=p, observed=labels)
 
         logging.info("Done building the Shopper model.")

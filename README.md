@@ -10,11 +10,10 @@ PyShopper is a Python implementation of Shopper, a probablistic model of shoppin
 
 ## Project Status
 - This mini-project is under active development. 
-- The code is currently NOT usable. I've specified the Shopper model in PyMC3 but it is not optimized.
-- PyShopper code has only been run on a dataset with 100 observed trips (~300 observations). 
+- This model can be fitted with either MCMC sampling or variational inference. 
+- An example is provided in the Jupyter notebook `example.ipynb`.
+- PyShopper code has been tested in Colab on a dataset with 5000 observed trips (~15000 observations). 
 - Depending on your RAM, I do not know whether the code is memory efficient enough for a larger dataset. 
-- Inference via NUTS MCMC sampling seems to converge in this very limited sample. 
-- Sampling is very slow and takes over 5 hours to complete on my T590 ThinkPad.
 
 ## Background
 The goals of this mini-project were to:
@@ -37,20 +36,24 @@ PyShopper depends on the following packages:
 from pyshopper import shopper
 
 # Load data
+# Note: this dataset is likely to large to fit in memory
+# Consider limiting the number of trips to ~1000.
 X_train = shopper.load_data('data/train.tsv',
                             'data/prices.tsv')
 
 # Create Shopper instance
 model = shopper.Shopper(X_train)
 
-# Fit model
-res = model.fit(draws=1000, random_seed=42)
+# Fit model using variational inference
+res = model.fit(N=10000, method='ADVI', random_seed=42)
 
-# Return trace plot
-res.trace_plot()
+# Return ELBO trace plot
+res.elbow_plot()
 
 # Return summary of common posterior statistics
-res.summary()
+# Note: we must draw a sample from the 
+# approximated posterior distribution
+res.summary(draws=1000)
 ```
 
 ## To Do
