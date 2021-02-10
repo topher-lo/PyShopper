@@ -48,15 +48,22 @@ import numpy as np
 import theano
 import pandas as pd
 import pymc3 as pm
+import seaborn as sns
 
 import theano.tensor as tt
 
 from sklearn import preprocessing
+from matplotlib import pyplot as plt
+
+from pymc3.variational.callbacks import CheckParametersConvergence
 
 
 # Logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+# Set seaborn default theme
+sns.set_theme()
 
 # Global variables
 DATA_PATH = &#39;data/train.tsv&#39;
@@ -114,6 +121,7 @@ class Shopper:
                  data: pd.DataFrame,
                  K: int = 50,
                  price_dim: int = 10,
+                 price_dtype: str = &#39;float32&#39;,
                  rho_var: float = 1,
                  alpha_var: float = 1,
                  lambda_var: float = 1,
@@ -129,7 +137,8 @@ class Shopper:
         Args:
             data (Pandas DataFrame): 
                 Observed trips data (number of trips by 4).
-                DataFrame with columns: user_id, item_id, session_id, and price.
+                DataFrame with columns: user_id, item_id, session_id, 
+                and price.
 
             K (int): 
                 Number of latent factors for alpha_c, rho_c, and theta_u;
@@ -138,6 +147,9 @@ class Shopper:
             price_dim (int): 
                 Number of latent factors for price vectors gamma_u and beta_c;
                 defaults to 10.
+
+            price_dtype (str): 
+                The datatype used for prices; defaults to float32.
 
             rho_var (float): 
                 Prior variance over rho_c; defaults to 1.
@@ -178,18 +190,22 @@ class Shopper:
                     .cumcount()
         # Scaling factor
         sf = order.apply(lambda x: 1 / x if x &gt; 0 else 0)
+        sf = sf.to_numpy(dtype=&#39;float32&#39;)
         # Number of items
         C = data[&#39;item_id&#39;].nunique()
         # Number of users
         U = data[&#39;user_id&#39;].nunique()
         # Observations index
         obs_idx = preprocessing.LabelEncoder().fit_transform(data.index)
+        obs_idx = obs_idx.astype(&#39;int32&#39;)
         # Items
         items = data[&#39;item_id&#39;]
         items_idx = preprocessing.LabelEncoder().fit_transform(items)
+        items_idx = items_idx.astype(&#39;int32&#39;)
         # Users
         users = data[&#39;user_id&#39;]
         users_idx = preprocessing.LabelEncoder().fit_transform(users)
+        users_idx = users_idx.astype(&#39;int32&#39;)
 
         logging.info(&#39;Building the Shopper model...&#39;)
         with pm.Model() as shopper:
@@ -199,32 +215,38 @@ class Shopper:
             rho_c = pm.Normal(&#39;rho_c&#39;,
                               mu=0,
                               sigma=rho_var,
-                              shape=(C, K))
+                              shape=(C, K),
+                              dtype=&#39;float32&#39;)
             # per item attributes
             alpha_c = pm.Normal(&#39;alpha_c&#39;,
                                 mu=0,
                                 sigma=alpha_var,
-                                shape=(C, K))
+                                shape=(C, K),
+                                dtype=&#39;float32&#39;)
             # per user preferences
             theta_u = pm.Normal(&#39;theta_u&#39;,
                                 mu=0,
                                 sigma=theta_var,
-                                shape=(U, K))
+                                shape=(U, K),
+                                dtype=&#39;float32&#39;)
             # per item popularities
             lambda_c = pm.Normal(&#39;lambda_c&#39;,
                                  mu=0,
                                  sigma=lambda_var,
-                                 shape=C)
+                                 shape=C,
+                                 dtype=&#39;float32&#39;)
             # per user price sensitivities
             gamma_u = pm.Gamma(&#39;gamma_u&#39;,
                                beta=gamma_rate,
                                alpha=gamma_shape,
-                               shape=(U, price_dim))
+                               shape=(U, price_dim),
+                               dtype=&#39;float32&#39;)
             # per item price sensitivities
             beta_c = pm.Gamma(&#39;beta_c&#39;,
                               beta=beta_rate,
                               alpha=beta_shape,
-                              shape=(C, price_dim))
+                              shape=(C, price_dim),
+                              dtype=&#39;float32&#39;)
 
             # Baseline utility per item per user:
             # Item popularity + Consumer Preferences - Price Effects
@@ -233,7 +255,7 @@ class Shopper:
             psi_tc = lambda_c[items_idx] +\
                 pm.math.dot(theta_u[users_idx], alpha_c[items_idx].T) -\
                 pm.math.dot(gamma_u[users_idx], beta_c[items_idx].T) *\
-                np.log(data[&#39;price&#39;])
+                np.log(data[&#39;price&#39;]).astype(price_dtype)
 
             # sum^{i-1}_j [alpha_{y_tj}]
             def basket_items_attr(omega_prev, idx, alpha_c, order):
@@ -263,6 +285,7 @@ class Shopper:
             p = pm.Deterministic(&#39;p&#39;, tt.nnet.softmax(Psi_tci))
             labels = preprocessing.LabelEncoder()\
                                   .fit_transform(data[&#39;item_id&#39;])
+            labels = labels.astype(&#39;int32&#39;)
             y = pm.Categorical(&#39;y&#39;, p=p, observed=labels)
 
         logging.info(&#34;Done building the Shopper model.&#34;)
@@ -270,40 +293,54 @@ class Shopper:
         self.model = shopper
 
     def fit(self,
-            draws,
+            N,
+            method=&#39;ADVI&#39;,
             step=None,
+            diff=&#39;relative&#39;,
             return_inferencedata=True,
-            random_seed=42):
+            random_seed=42,
+            **kwargs):
         &#34;&#34;&#34;Estimate parameters using Bayesian inference.
         Returns ShopperResults instance.
 
         Args:
-            draws (int): 
-                Number of draws.
+            N (int): 
+                Number of draws (MCMC) or iterations (ADVI).
 
-            step (function or iterable of functions): 
+            method (str): 
+              - MCMC -- Monte Carlo Markov Chains
+              - ADVI -- Automatic Differentiation Variational Inference
+
+            diff (str): 
+                Requires method to be ADVI. The difference type used
+                to check convergence in the mean of the ADVI approximation
+
+            step (function or iterable of functions):
+                Requires method to be MCMC.
                 A step function or collection of functions;
                 defaults None (which uses the NUTS step method).
 
             return_inferencedata (bool): 
+                Requires method to be MCMC.
                 If True, returns arviz.InferenceData object.
                 Otherwise, returns MultiTrace.InferenceData object.
                 Defaults to True.
 
             random_seed (int): 
                 Random seed; defaults to 42.
-
-        Methods supported:
-
-        - MCMC -- Monte Carlo Markov Chains
-
         &#34;&#34;&#34;
         model = self.model
         with model:
-            res = pm.sample(draws=draws,
-                            step=step,
-                            return_inferencedata=True,
-                            random_seed=random_seed)
+            if method == &#39;ADVI&#39;:
+                callback = CheckParametersConvergence(diff=diff)
+                res = pm.fit(n=N,
+                             method=&#39;advi&#39;,
+                             callbacks=[callback])
+            else:
+                res = pm.sample(draws=N,
+                                step=step,
+                                return_inferencedata=True,
+                                random_seed=random_seed)
         return ShopperResults(res)
 
 
@@ -311,24 +348,41 @@ class ShopperResults:
     &#34;&#34;&#34;Results class for a fitted Shopper model.
 
     Attributes:
-        res (arviz.InferenceData or MultiTrace.InferenceData): 
-            PyMC3 sampling results object.
+        res (PyMC3 results instance): 
+            If MCMC, then requires arviz.InferenceData or
+            MultiTrace.InferenceData. Else if ADVI, then
+            requires pymc3.variational.opvi.Approximation.
     &#34;&#34;&#34;
     def __init__(self, res):
         self.res = res
 
-    def summary(self):
+    def summary(self, **kwargs):
         &#34;&#34;&#34;Returns text-based output of common posterior statistics.
-        &#34;&#34;&#34;
-        return az.summary(self.res)
 
-    def trace_plot(self):
+        Requires &#39;draws&#39; (sample size to be drawn from posterior distribution)
+        to be set in kwargs if model was fitted with ADVI.
+        &#34;&#34;&#34;
+        res = self.res
+        if &#39;variational&#39; in str(type(res)):
+            trace = res.sample(kwargs[&#39;draws&#39;])
+            summary = az.summary(trace, kind=&#39;stats&#39;)
+        else:
+            summary = az.summary(res)
+        return summary
+
+    def trace_plot(self, **kwargs):
         &#34;&#34;&#34;Returns the trace plot.
 
-        Requires the Shopper model to be fitted with
-        MCMC sampling.
+        Requires &#39;draws&#39; (sample size to be drawn from posterior distribution)
+        to be set in kwargs if model was fitted with ADVI.
         &#34;&#34;&#34;
-        return az.plot_trace(self.res)
+        res = self.res
+        if type(res) == pm.variational.opvi.Approximation:
+            sample = res.sample(draws=kwargs[&#39;draws&#39;])
+            trace = az.plot_trace(sample)
+        else:
+            trace = az.plot_trace(res)
+        return trace
 
     def rhat(self):
         &#34;&#34;&#34;Returns the Gelman-Rubin statistic.
@@ -347,6 +401,17 @@ class ShopperResults:
         MCMC sampling.
         &#34;&#34;&#34;
         return az.plot_energy(self.res)
+
+    def elbo_plot(self):
+        &#34;&#34;&#34;Returns trace plot of ADVI&#39;s objective function (ELBO).
+
+        Requires the Shopper model to be fitted with ADVI.
+        &#34;&#34;&#34;
+        fig = plt.figure()
+        plt.plot(self.res.hist)
+        plt.ylabel(&#39;ELBO&#39;)
+        plt.xlabel(&#39;n iterations&#39;)
+        return fig
 
     def predict(self, X):
         &#34;&#34;&#34;Returns predicted probabilities for
@@ -434,7 +499,7 @@ Each row represents the price per item per session.</dd>
 <dl>
 <dt id="pyshopper.shopper.Shopper"><code class="flex name class">
 <span>class <span class="ident">Shopper</span></span>
-<span>(</span><span>data: pandas.core.frame.DataFrame, K: int = 50, price_dim: int = 10, rho_var: float = 1, alpha_var: float = 1, lambda_var: float = 1, theta_var: float = 1, delta_var: float = 0.01, mu_var: float = 0.01, gamma_rate: float = 1000, gamma_shape: float = 100, beta_rate: float = 1000, beta_shape: float = 100)</span>
+<span>(</span><span>data: pandas.core.frame.DataFrame, K: int = 50, price_dim: int = 10, price_dtype: str = 'float32', rho_var: float = 1, alpha_var: float = 1, lambda_var: float = 1, theta_var: float = 1, delta_var: float = 0.01, mu_var: float = 0.01, gamma_rate: float = 1000, gamma_shape: float = 100, beta_rate: float = 1000, beta_shape: float = 100)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Shopper implementation.</p>
@@ -454,13 +519,16 @@ DataFrame with columns: user_id, item_id, session_id, and price.</dd>
 <dl>
 <dt><strong><code>data</code></strong> :&ensp;<code>Pandas DataFrame</code></dt>
 <dd>Observed trips data (number of trips by 4).
-DataFrame with columns: user_id, item_id, session_id, and price.</dd>
+DataFrame with columns: user_id, item_id, session_id,
+and price.</dd>
 <dt><strong><code>K</code></strong> :&ensp;<code>int</code></dt>
 <dd>Number of latent factors for alpha_c, rho_c, and theta_u;
 defaults to 50.</dd>
 <dt><strong><code>price_dim</code></strong> :&ensp;<code>int</code></dt>
 <dd>Number of latent factors for price vectors gamma_u and beta_c;
 defaults to 10.</dd>
+<dt><strong><code>price_dtype</code></strong> :&ensp;<code>str</code></dt>
+<dd>The datatype used for prices; defaults to float32.</dd>
 <dt><strong><code>rho_var</code></strong> :&ensp;<code>float</code></dt>
 <dd>Prior variance over rho_c; defaults to 1.</dd>
 <dt><strong><code>alpha_var</code></strong> :&ensp;<code>float</code></dt>
@@ -506,6 +574,7 @@ defaults to 10.</dd>
                  data: pd.DataFrame,
                  K: int = 50,
                  price_dim: int = 10,
+                 price_dtype: str = &#39;float32&#39;,
                  rho_var: float = 1,
                  alpha_var: float = 1,
                  lambda_var: float = 1,
@@ -521,7 +590,8 @@ defaults to 10.</dd>
         Args:
             data (Pandas DataFrame): 
                 Observed trips data (number of trips by 4).
-                DataFrame with columns: user_id, item_id, session_id, and price.
+                DataFrame with columns: user_id, item_id, session_id, 
+                and price.
 
             K (int): 
                 Number of latent factors for alpha_c, rho_c, and theta_u;
@@ -530,6 +600,9 @@ defaults to 10.</dd>
             price_dim (int): 
                 Number of latent factors for price vectors gamma_u and beta_c;
                 defaults to 10.
+
+            price_dtype (str): 
+                The datatype used for prices; defaults to float32.
 
             rho_var (float): 
                 Prior variance over rho_c; defaults to 1.
@@ -570,18 +643,22 @@ defaults to 10.</dd>
                     .cumcount()
         # Scaling factor
         sf = order.apply(lambda x: 1 / x if x &gt; 0 else 0)
+        sf = sf.to_numpy(dtype=&#39;float32&#39;)
         # Number of items
         C = data[&#39;item_id&#39;].nunique()
         # Number of users
         U = data[&#39;user_id&#39;].nunique()
         # Observations index
         obs_idx = preprocessing.LabelEncoder().fit_transform(data.index)
+        obs_idx = obs_idx.astype(&#39;int32&#39;)
         # Items
         items = data[&#39;item_id&#39;]
         items_idx = preprocessing.LabelEncoder().fit_transform(items)
+        items_idx = items_idx.astype(&#39;int32&#39;)
         # Users
         users = data[&#39;user_id&#39;]
         users_idx = preprocessing.LabelEncoder().fit_transform(users)
+        users_idx = users_idx.astype(&#39;int32&#39;)
 
         logging.info(&#39;Building the Shopper model...&#39;)
         with pm.Model() as shopper:
@@ -591,32 +668,38 @@ defaults to 10.</dd>
             rho_c = pm.Normal(&#39;rho_c&#39;,
                               mu=0,
                               sigma=rho_var,
-                              shape=(C, K))
+                              shape=(C, K),
+                              dtype=&#39;float32&#39;)
             # per item attributes
             alpha_c = pm.Normal(&#39;alpha_c&#39;,
                                 mu=0,
                                 sigma=alpha_var,
-                                shape=(C, K))
+                                shape=(C, K),
+                                dtype=&#39;float32&#39;)
             # per user preferences
             theta_u = pm.Normal(&#39;theta_u&#39;,
                                 mu=0,
                                 sigma=theta_var,
-                                shape=(U, K))
+                                shape=(U, K),
+                                dtype=&#39;float32&#39;)
             # per item popularities
             lambda_c = pm.Normal(&#39;lambda_c&#39;,
                                  mu=0,
                                  sigma=lambda_var,
-                                 shape=C)
+                                 shape=C,
+                                 dtype=&#39;float32&#39;)
             # per user price sensitivities
             gamma_u = pm.Gamma(&#39;gamma_u&#39;,
                                beta=gamma_rate,
                                alpha=gamma_shape,
-                               shape=(U, price_dim))
+                               shape=(U, price_dim),
+                               dtype=&#39;float32&#39;)
             # per item price sensitivities
             beta_c = pm.Gamma(&#39;beta_c&#39;,
                               beta=beta_rate,
                               alpha=beta_shape,
-                              shape=(C, price_dim))
+                              shape=(C, price_dim),
+                              dtype=&#39;float32&#39;)
 
             # Baseline utility per item per user:
             # Item popularity + Consumer Preferences - Price Effects
@@ -625,7 +708,7 @@ defaults to 10.</dd>
             psi_tc = lambda_c[items_idx] +\
                 pm.math.dot(theta_u[users_idx], alpha_c[items_idx].T) -\
                 pm.math.dot(gamma_u[users_idx], beta_c[items_idx].T) *\
-                np.log(data[&#39;price&#39;])
+                np.log(data[&#39;price&#39;]).astype(price_dtype)
 
             # sum^{i-1}_j [alpha_{y_tj}]
             def basket_items_attr(omega_prev, idx, alpha_c, order):
@@ -655,6 +738,7 @@ defaults to 10.</dd>
             p = pm.Deterministic(&#39;p&#39;, tt.nnet.softmax(Psi_tci))
             labels = preprocessing.LabelEncoder()\
                                   .fit_transform(data[&#39;item_id&#39;])
+            labels = labels.astype(&#39;int32&#39;)
             y = pm.Categorical(&#39;y&#39;, p=p, observed=labels)
 
         logging.info(&#34;Done building the Shopper model.&#34;)
@@ -662,107 +746,145 @@ defaults to 10.</dd>
         self.model = shopper
 
     def fit(self,
-            draws,
+            N,
+            method=&#39;ADVI&#39;,
             step=None,
+            diff=&#39;relative&#39;,
             return_inferencedata=True,
-            random_seed=42):
+            random_seed=42,
+            **kwargs):
         &#34;&#34;&#34;Estimate parameters using Bayesian inference.
         Returns ShopperResults instance.
 
         Args:
-            draws (int): 
-                Number of draws.
+            N (int): 
+                Number of draws (MCMC) or iterations (ADVI).
 
-            step (function or iterable of functions): 
+            method (str): 
+              - MCMC -- Monte Carlo Markov Chains
+              - ADVI -- Automatic Differentiation Variational Inference
+
+            diff (str): 
+                Requires method to be ADVI. The difference type used
+                to check convergence in the mean of the ADVI approximation
+
+            step (function or iterable of functions):
+                Requires method to be MCMC.
                 A step function or collection of functions;
                 defaults None (which uses the NUTS step method).
 
             return_inferencedata (bool): 
+                Requires method to be MCMC.
                 If True, returns arviz.InferenceData object.
                 Otherwise, returns MultiTrace.InferenceData object.
                 Defaults to True.
 
             random_seed (int): 
                 Random seed; defaults to 42.
-
-        Methods supported:
-
-        - MCMC -- Monte Carlo Markov Chains
-
         &#34;&#34;&#34;
         model = self.model
         with model:
-            res = pm.sample(draws=draws,
-                            step=step,
-                            return_inferencedata=True,
-                            random_seed=random_seed)
+            if method == &#39;ADVI&#39;:
+                callback = CheckParametersConvergence(diff=diff)
+                res = pm.fit(n=N,
+                             method=&#39;advi&#39;,
+                             callbacks=[callback])
+            else:
+                res = pm.sample(draws=N,
+                                step=step,
+                                return_inferencedata=True,
+                                random_seed=random_seed)
         return ShopperResults(res)</code></pre>
 </details>
 <h3>Methods</h3>
 <dl>
 <dt id="pyshopper.shopper.Shopper.fit"><code class="name flex">
-<span>def <span class="ident">fit</span></span>(<span>self, draws, step=None, return_inferencedata=True, random_seed=42)</span>
+<span>def <span class="ident">fit</span></span>(<span>self, N, method='ADVI', step=None, diff='relative', return_inferencedata=True, random_seed=42, **kwargs)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Estimate parameters using Bayesian inference.
 Returns ShopperResults instance.</p>
 <h2 id="args">Args</h2>
 <dl>
-<dt><strong><code>draws</code></strong> :&ensp;<code>int</code></dt>
-<dd>Number of draws.</dd>
-<dt><strong><code>step</code></strong> :&ensp;<code>function</code> or <code>iterable</code> of <code>functions</code></dt>
-<dd>A step function or collection of functions;
-defaults None (which uses the NUTS step method).</dd>
+<dt><strong><code>N</code></strong> :&ensp;<code>int</code></dt>
+<dd>Number of draws (MCMC) or iterations (ADVI).</dd>
+<dt><strong><code>method</code></strong> :&ensp;<code>str</code></dt>
+<dd>
+<ul>
+<li>MCMC &ndash; Monte Carlo Markov Chains</li>
+<li>ADVI &ndash; Automatic Differentiation Variational Inference</li>
+</ul>
+</dd>
+<dt><strong><code>diff</code></strong> :&ensp;<code>str</code></dt>
+<dd>Requires method to be ADVI. The difference type used
+to check convergence in the mean of the ADVI approximation</dd>
+</dl>
+<p>step (function or iterable of functions):
+Requires method to be MCMC.
+A step function or collection of functions;
+defaults None (which uses the NUTS step method).</p>
+<dl>
 <dt><strong><code>return_inferencedata</code></strong> :&ensp;<code>bool</code></dt>
-<dd>If True, returns arviz.InferenceData object.
+<dd>Requires method to be MCMC.
+If True, returns arviz.InferenceData object.
 Otherwise, returns MultiTrace.InferenceData object.
 Defaults to True.</dd>
 <dt><strong><code>random_seed</code></strong> :&ensp;<code>int</code></dt>
 <dd>Random seed; defaults to 42.</dd>
-</dl>
-<p>Methods supported:</p>
-<ul>
-<li>MCMC &ndash; Monte Carlo Markov Chains</li>
-</ul></div>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def fit(self,
-        draws,
+        N,
+        method=&#39;ADVI&#39;,
         step=None,
+        diff=&#39;relative&#39;,
         return_inferencedata=True,
-        random_seed=42):
+        random_seed=42,
+        **kwargs):
     &#34;&#34;&#34;Estimate parameters using Bayesian inference.
     Returns ShopperResults instance.
 
     Args:
-        draws (int): 
-            Number of draws.
+        N (int): 
+            Number of draws (MCMC) or iterations (ADVI).
 
-        step (function or iterable of functions): 
+        method (str): 
+          - MCMC -- Monte Carlo Markov Chains
+          - ADVI -- Automatic Differentiation Variational Inference
+
+        diff (str): 
+            Requires method to be ADVI. The difference type used
+            to check convergence in the mean of the ADVI approximation
+
+        step (function or iterable of functions):
+            Requires method to be MCMC.
             A step function or collection of functions;
             defaults None (which uses the NUTS step method).
 
         return_inferencedata (bool): 
+            Requires method to be MCMC.
             If True, returns arviz.InferenceData object.
             Otherwise, returns MultiTrace.InferenceData object.
             Defaults to True.
 
         random_seed (int): 
             Random seed; defaults to 42.
-
-    Methods supported:
-
-    - MCMC -- Monte Carlo Markov Chains
-
     &#34;&#34;&#34;
     model = self.model
     with model:
-        res = pm.sample(draws=draws,
-                        step=step,
-                        return_inferencedata=True,
-                        random_seed=random_seed)
+        if method == &#39;ADVI&#39;:
+            callback = CheckParametersConvergence(diff=diff)
+            res = pm.fit(n=N,
+                         method=&#39;advi&#39;,
+                         callbacks=[callback])
+        else:
+            res = pm.sample(draws=N,
+                            step=step,
+                            return_inferencedata=True,
+                            random_seed=random_seed)
     return ShopperResults(res)</code></pre>
 </details>
 </dd>
@@ -776,8 +898,10 @@ Defaults to True.</dd>
 <div class="desc"><p>Results class for a fitted Shopper model.</p>
 <h2 id="attributes">Attributes</h2>
 <dl>
-<dt><strong><code>res</code></strong> :&ensp;<code>arviz.InferenceData</code> or <code>MultiTrace.InferenceData</code></dt>
-<dd>PyMC3 sampling results object.</dd>
+<dt><strong><code>res</code></strong> :&ensp;<code>PyMC3 results instance</code></dt>
+<dd>If MCMC, then requires arviz.InferenceData or
+MultiTrace.InferenceData. Else if ADVI, then
+requires pymc3.variational.opvi.Approximation.</dd>
 </dl></div>
 <details class="source">
 <summary>
@@ -787,24 +911,41 @@ Defaults to True.</dd>
     &#34;&#34;&#34;Results class for a fitted Shopper model.
 
     Attributes:
-        res (arviz.InferenceData or MultiTrace.InferenceData): 
-            PyMC3 sampling results object.
+        res (PyMC3 results instance): 
+            If MCMC, then requires arviz.InferenceData or
+            MultiTrace.InferenceData. Else if ADVI, then
+            requires pymc3.variational.opvi.Approximation.
     &#34;&#34;&#34;
     def __init__(self, res):
         self.res = res
 
-    def summary(self):
+    def summary(self, **kwargs):
         &#34;&#34;&#34;Returns text-based output of common posterior statistics.
-        &#34;&#34;&#34;
-        return az.summary(self.res)
 
-    def trace_plot(self):
+        Requires &#39;draws&#39; (sample size to be drawn from posterior distribution)
+        to be set in kwargs if model was fitted with ADVI.
+        &#34;&#34;&#34;
+        res = self.res
+        if &#39;variational&#39; in str(type(res)):
+            trace = res.sample(kwargs[&#39;draws&#39;])
+            summary = az.summary(trace, kind=&#39;stats&#39;)
+        else:
+            summary = az.summary(res)
+        return summary
+
+    def trace_plot(self, **kwargs):
         &#34;&#34;&#34;Returns the trace plot.
 
-        Requires the Shopper model to be fitted with
-        MCMC sampling.
+        Requires &#39;draws&#39; (sample size to be drawn from posterior distribution)
+        to be set in kwargs if model was fitted with ADVI.
         &#34;&#34;&#34;
-        return az.plot_trace(self.res)
+        res = self.res
+        if type(res) == pm.variational.opvi.Approximation:
+            sample = res.sample(draws=kwargs[&#39;draws&#39;])
+            trace = az.plot_trace(sample)
+        else:
+            trace = az.plot_trace(res)
+        return trace
 
     def rhat(self):
         &#34;&#34;&#34;Returns the Gelman-Rubin statistic.
@@ -824,6 +965,17 @@ Defaults to True.</dd>
         &#34;&#34;&#34;
         return az.plot_energy(self.res)
 
+    def elbo_plot(self):
+        &#34;&#34;&#34;Returns trace plot of ADVI&#39;s objective function (ELBO).
+
+        Requires the Shopper model to be fitted with ADVI.
+        &#34;&#34;&#34;
+        fig = plt.figure()
+        plt.plot(self.res.hist)
+        plt.ylabel(&#39;ELBO&#39;)
+        plt.xlabel(&#39;n iterations&#39;)
+        return fig
+
     def predict(self, X):
         &#34;&#34;&#34;Returns predicted probabilities for
         samples in X.
@@ -838,6 +990,28 @@ Defaults to True.</dd>
 </details>
 <h3>Methods</h3>
 <dl>
+<dt id="pyshopper.shopper.ShopperResults.elbo_plot"><code class="name flex">
+<span>def <span class="ident">elbo_plot</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Returns trace plot of ADVI's objective function (ELBO).</p>
+<p>Requires the Shopper model to be fitted with ADVI.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def elbo_plot(self):
+    &#34;&#34;&#34;Returns trace plot of ADVI&#39;s objective function (ELBO).
+
+    Requires the Shopper model to be fitted with ADVI.
+    &#34;&#34;&#34;
+    fig = plt.figure()
+    plt.plot(self.res.hist)
+    plt.ylabel(&#39;ELBO&#39;)
+    plt.xlabel(&#39;n iterations&#39;)
+    return fig</code></pre>
+</details>
+</dd>
 <dt id="pyshopper.shopper.ShopperResults.energy_plot"><code class="name flex">
 <span>def <span class="ident">energy_plot</span></span>(<span>self)</span>
 </code></dt>
@@ -917,38 +1091,55 @@ and labels.</p></div>
 </details>
 </dd>
 <dt id="pyshopper.shopper.ShopperResults.summary"><code class="name flex">
-<span>def <span class="ident">summary</span></span>(<span>self)</span>
+<span>def <span class="ident">summary</span></span>(<span>self, **kwargs)</span>
 </code></dt>
 <dd>
-<div class="desc"><p>Returns text-based output of common posterior statistics.</p></div>
+<div class="desc"><p>Returns text-based output of common posterior statistics.</p>
+<p>Requires 'draws' (sample size to be drawn from posterior distribution)
+to be set in kwargs if model was fitted with ADVI.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def summary(self):
+<pre><code class="python">def summary(self, **kwargs):
     &#34;&#34;&#34;Returns text-based output of common posterior statistics.
+
+    Requires &#39;draws&#39; (sample size to be drawn from posterior distribution)
+    to be set in kwargs if model was fitted with ADVI.
     &#34;&#34;&#34;
-    return az.summary(self.res)</code></pre>
+    res = self.res
+    if &#39;variational&#39; in str(type(res)):
+        trace = res.sample(kwargs[&#39;draws&#39;])
+        summary = az.summary(trace, kind=&#39;stats&#39;)
+    else:
+        summary = az.summary(res)
+    return summary</code></pre>
 </details>
 </dd>
 <dt id="pyshopper.shopper.ShopperResults.trace_plot"><code class="name flex">
-<span>def <span class="ident">trace_plot</span></span>(<span>self)</span>
+<span>def <span class="ident">trace_plot</span></span>(<span>self, **kwargs)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Returns the trace plot.</p>
-<p>Requires the Shopper model to be fitted with
-MCMC sampling.</p></div>
+<p>Requires 'draws' (sample size to be drawn from posterior distribution)
+to be set in kwargs if model was fitted with ADVI.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def trace_plot(self):
+<pre><code class="python">def trace_plot(self, **kwargs):
     &#34;&#34;&#34;Returns the trace plot.
 
-    Requires the Shopper model to be fitted with
-    MCMC sampling.
+    Requires &#39;draws&#39; (sample size to be drawn from posterior distribution)
+    to be set in kwargs if model was fitted with ADVI.
     &#34;&#34;&#34;
-    return az.plot_trace(self.res)</code></pre>
+    res = self.res
+    if type(res) == pm.variational.opvi.Approximation:
+        sample = res.sample(draws=kwargs[&#39;draws&#39;])
+        trace = az.plot_trace(sample)
+    else:
+        trace = az.plot_trace(res)
+    return trace</code></pre>
 </details>
 </dd>
 </dl>
@@ -983,6 +1174,7 @@ MCMC sampling.</p></div>
 <li>
 <h4><code><a title="pyshopper.shopper.ShopperResults" href="#pyshopper.shopper.ShopperResults">ShopperResults</a></code></h4>
 <ul class="two-column">
+<li><code><a title="pyshopper.shopper.ShopperResults.elbo_plot" href="#pyshopper.shopper.ShopperResults.elbo_plot">elbo_plot</a></code></li>
 <li><code><a title="pyshopper.shopper.ShopperResults.energy_plot" href="#pyshopper.shopper.ShopperResults.energy_plot">energy_plot</a></code></li>
 <li><code><a title="pyshopper.shopper.ShopperResults.predict" href="#pyshopper.shopper.ShopperResults.predict">predict</a></code></li>
 <li><code><a title="pyshopper.shopper.ShopperResults.rhat" href="#pyshopper.shopper.ShopperResults.rhat">rhat</a></code></li>
