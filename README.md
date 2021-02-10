@@ -31,12 +31,12 @@ PyShopper depends on the following packages:
 - `scikit-learn`
 - `theano`
 
-## A quick example
+## :rocket: A quick example
 ```python
 from pyshopper import shopper
 
 # Load data
-# Note: this dataset is likely to large to fit in memory
+# Note: this dataset is unlikely to large to fit in memory
 # Consider limiting the number of trips to ~1000.
 X_train = shopper.load_data('data/train.tsv',
                             'data/prices.tsv')
@@ -56,15 +56,8 @@ res.elbow_plot()
 res.summary(draws=1000)
 ```
 
-## To Do
-- Implement baseline Shopper without seasonality effects on a limited dataset (Expected completion: 2/7/2021)
-- Run baseline Shopper with MCMC sampling on simulated data
-- Implement variational inference for Shopper using PyMC3's ADVI API
-- Run baseline Shopper with ADVI on simulated data
-- Optimise memory usage and speed
-
 ## Roadmap
-- Implement baseline Shopper without seasonality effects (In Progress)
+- Implement baseline Shopper without seasonality effects on a limited dataset (Complete)
 - Add random sampling of unordered baskets (TBD)
 - Add seasonality effects (TBD)
 - Add thinking ahead procedure (TBD)
