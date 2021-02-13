@@ -8,6 +8,7 @@ PyShopper is a Python implementation of Shopper, a probablistic model of shoppin
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/topher-lo/PyShopper)
 
 
+
 ## Project Status
 - This mini-project is under active development. 
 - This model can be fitted with either MCMC sampling or variational inference. 
@@ -22,7 +23,7 @@ The goals of this mini-project were to:
 - Implement a Bayesian model that does not have any pre-existing solution in Python (as of January 2021)
 
 ## Install
-PyShopper depends on the following packages:
+PyShopper has been tested with `python 3.8` and depends on the following packages:
 - `arviz`
 - `numpy`
 - `pandas`
@@ -30,6 +31,22 @@ PyShopper depends on the following packages:
 - `seaborn`
 - `scikit-learn`
 - `theano`
+
+To use `pydera`, you must first clone this repo:
+```
+git clone git@github.com:topher-lo/PyShopper.git
+cd [..path/to/repo]
+```
+Then install its dependencies using either `pip`:
+```
+python3 -m venv env
+source env/bin/activate
+pip install -r requirements.txt
+```
+Or `conda`:
+```
+conda env create -f environment.yml
+```
 
 ## :rocket: A quick example
 ```python
