@@ -101,6 +101,43 @@ def load_data(data_path: str = DATA_PATH, prices_path: str = PRICES_PATH):
     return data
 
 
+def _prepare_data(data: pd.DataFrame):
+    &#34;&#34;&#34;Prepare data for used in Shopper. Returns preprocessed
+    data variables.
+    &#34;&#34;&#34;
+    # Prices
+    prices = data[&#39;price&#39;]
+    # Order
+    order = data.groupby([&#39;user_id&#39;, &#39;session_id&#39;])[&#39;item_id&#39;]\
+                .cumcount()
+    # Scaling factor
+    sf = (order.apply(lambda x: 1 / x if x &gt; 0 else 0)
+               .to_numpy(dtype=&#39;float32&#39;))
+    # Observations index
+    obs_idx = (preprocessing.LabelEncoder()
+                            .fit_transform(data.index)
+                            .astype(&#39;int32&#39;))
+    # Items
+    items_idx = (preprocessing.LabelEncoder()
+                              .fit_transform(data[&#39;item_id&#39;])
+                              .astype(&#39;int32&#39;))
+    # Users
+    users_idx = (preprocessing.LabelEncoder()
+                              .fit_transform(data[&#39;user_id&#39;])
+                              .astype(&#39;int32&#39;))
+    # Labels
+    labels = (preprocessing.LabelEncoder()
+                           .fit_transform(data[&#39;item_id&#39;])
+                           .astype(&#39;int32&#39;))
+    return {&#39;prices&#39;: prices,
+            &#39;order&#39;: order,
+            &#39;sf&#39;: sf,
+            &#39;obs_idx&#39;: obs_idx,
+            &#39;items_idx&#39;: items_idx,
+            &#39;users_idx&#39;: users_idx,
+            &#39;labels&#39;: labels}
+
+
 class Shopper:
     &#34;&#34;&#34;Shopper implementation.
 
@@ -183,34 +220,27 @@ class Shopper:
         &#34;&#34;&#34;
         # Set data
         self.data = data
-        # Number of observations
-        N_obs = len(data)
-        # Order
-        order = data.groupby([&#39;user_id&#39;, &#39;session_id&#39;])[&#39;item_id&#39;]\
-                    .cumcount()
-        # Scaling factor
-        sf = order.apply(lambda x: 1 / x if x &gt; 0 else 0)
-        sf = sf.to_numpy(dtype=&#39;float32&#39;)
+
         # Number of items
         C = data[&#39;item_id&#39;].nunique()
         # Number of users
         U = data[&#39;user_id&#39;].nunique()
-        # Observations index
-        obs_idx = preprocessing.LabelEncoder().fit_transform(data.index)
-        obs_idx = obs_idx.astype(&#39;int32&#39;)
-        # Items
-        items = data[&#39;item_id&#39;]
-        items_idx = preprocessing.LabelEncoder().fit_transform(items)
-        items_idx = items_idx.astype(&#39;int32&#39;)
-        # Users
-        users = data[&#39;user_id&#39;]
-        users_idx = preprocessing.LabelEncoder().fit_transform(users)
-        users_idx = users_idx.astype(&#39;int32&#39;)
+
+        # Get preprocessed data variables
+        data_vars = _prepare_data(data)
 
         logging.info(&#39;Building the Shopper model...&#39;)
         with pm.Model() as shopper:
-            # Latent variables
+            # Data
+            prices = pm.Data(&#39;prices&#39;, data_vars[&#39;prices&#39;])
+            order = pm.Data(&#39;order&#39;, data_vars[&#39;order&#39;])
+            sf = pm.Data(&#39;sf&#39;, data_vars[&#39;sf&#39;])
+            obs_idx = pm.Data(&#39;obs_idx&#39;, data_vars[&#39;obs_idx&#39;])
+            items_idx = pm.Data(&#39;items_idx&#39;, data_vars[&#39;items_idx&#39;])
+            users_idx = pm.Data(&#39;users_idx&#39;, data_vars[&#39;users_idx&#39;])
+            labels = pm.Data(&#39;labels&#39;, data_vars[&#39;labels&#39;])
 
+            # Latent variables
             # per item interaction coefficients
             rho_c = pm.Normal(&#39;rho_c&#39;,
                               mu=0,
@@ -229,7 +259,7 @@ class Shopper:
                                 sigma=theta_var,
                                 shape=(U, K),
                                 dtype=&#39;float32&#39;)
-            # per item popularities
+            # per item popularity
             lambda_c = pm.Normal(&#39;lambda_c&#39;,
                                  mu=0,
                                  sigma=lambda_var,
@@ -255,7 +285,7 @@ class Shopper:
             psi_tc = lambda_c[items_idx] +\
                 pm.math.dot(theta_u[users_idx], alpha_c[items_idx].T) -\
                 pm.math.dot(gamma_u[users_idx], beta_c[items_idx].T) *\
-                np.log(data[&#39;price&#39;]).astype(price_dtype)
+                np.log(prices).astype(price_dtype)
 
             # sum^{i-1}_j [alpha_{y_tj}]
             def basket_items_attr(omega_prev, idx, alpha_c, order):
@@ -272,10 +302,10 @@ class Shopper:
             omega_ti = tt.vector(&#39;omega_ti&#39;)
             omega_ti, updates = theano.scan(fn=basket_items_attr,
                                             outputs_info=omega_0,
-                                            non_sequences=[tt.arange(N_obs),
+                                            non_sequences=[obs_idx,
                                                            alpha_c,
                                                            order],
-                                            n_steps=N_obs)
+                                            n_steps=obs_idx.shape[0])
             # Mean utility per basket per item
             Psi_tci = tt.vector(&#39;Psi_tci&#39;)
             Psi_tci = psi_tc + pm.math.dot(rho_c[items_idx],
@@ -283,9 +313,6 @@ class Shopper:
 
             # Softmax likelihood p(y_ti = c | y_t0, y_t1, ..., y_ti-1)
             p = pm.Deterministic(&#39;p&#39;, tt.nnet.softmax(Psi_tci))
-            labels = preprocessing.LabelEncoder()\
-                                  .fit_transform(data[&#39;item_id&#39;])
-            labels = labels.astype(&#39;int32&#39;)
             y = pm.Categorical(&#39;y&#39;, p=p, observed=labels)
 
         logging.info(&#34;Done building the Shopper model.&#34;)
@@ -341,19 +368,23 @@ class Shopper:
                                 step=step,
                                 return_inferencedata=True,
                                 random_seed=random_seed)
-        return ShopperResults(res)
+        return ShopperResults(model, res)
 
 
 class ShopperResults:
     &#34;&#34;&#34;Results class for a fitted Shopper model.
 
     Attributes:
+        model (PyMC3 Model): 
+            Shopper model.
+
         res (PyMC3 results instance): 
             If MCMC, then requires arviz.InferenceData or
             MultiTrace.InferenceData. Else if ADVI, then
             requires pymc3.variational.opvi.Approximation.
     &#34;&#34;&#34;
-    def __init__(self, res):
+    def __init__(self, model, res):
+        self.model = model
         self.res = res
 
     def summary(self, **kwargs):
@@ -364,7 +395,10 @@ class ShopperResults:
         &#34;&#34;&#34;
         res = self.res
         if &#39;variational&#39; in str(type(res)):
-            trace = res.sample(kwargs[&#39;draws&#39;])
+            logging.info(&#39;Sampling from posterior distribution...&#39;)
+            trace = res.sample(draws=kwargs[&#39;draws&#39;])
+            logging.info(&#39;Sampling complete.&#39;)
+            logging.info(&#39;Computing posterior statistics...&#39;)
             summary = az.summary(trace, kind=&#39;stats&#39;)
         else:
             summary = az.summary(res)
@@ -377,12 +411,14 @@ class ShopperResults:
         to be set in kwargs if model was fitted with ADVI.
         &#34;&#34;&#34;
         res = self.res
-        if type(res) == pm.variational.opvi.Approximation:
-            sample = res.sample(draws=kwargs[&#39;draws&#39;])
-            trace = az.plot_trace(sample)
+        if &#39;variational&#39; in str(type(res)):
+            logging.info(&#39;Sampling from posterior distribution...&#39;)
+            trace = res.sample(draws=kwargs[&#39;draws&#39;])
+            logging.info(&#39;Sampling complete.&#39;)
+            plot = az.plot_trace(trace)
         else:
-            trace = az.plot_trace(res)
-        return trace
+            plot = az.plot_trace(res)
+        return plot
 
     def rhat(self):
         &#34;&#34;&#34;Returns the Gelman-Rubin statistic.
@@ -413,15 +449,36 @@ class ShopperResults:
         plt.xlabel(&#39;n iterations&#39;)
         return fig
 
-    def predict(self, X):
-        &#34;&#34;&#34;Returns predicted probabilities for
-        samples in X.
+    def predict(self, data, random_seed=42, **kwargs):
+        &#34;&#34;&#34;Returns predicted probabilities of outcomes for samples in X.
         &#34;&#34;&#34;
-        pass
+        model = self.model
+        res = self.res
+        data_vars = _prepare_data(data)
+        with model:
+            # Pass new values to model
+            pm.set_data(data_vars)
+            # Use the updated values and
+            # predict outcomes and probabilities
+            if &#39;variational&#39; in str(type(res)):
+                logging.info(&#39;Sampling from posterior distribution...&#39;)
+                trace = res.sample(draws=kwargs[&#39;draws&#39;])
+                logging.info(&#39;Sampling complete.&#39;)
+                posterior_predictive = pm.sample_posterior_predictive(
+                    trace,
+                    var_names=[&#39;y&#39;],
+                    random_seed=random_seed
+                )
+            else:
+                posterior_predictive = pm.sample_posterior_predictive(
+                    res,
+                    var_names=[&#39;y&#39;],
+                    random_seed=random_seed
+                )
+        return posterior_predictive[&#39;y&#39;]
 
-    def score(self, X, y):
-        &#34;&#34;&#34;Returns the mean accuracy on the given test data
-        and labels.
+    def score(self, data):
+        &#34;&#34;&#34;Returns the mean accuracy on the given test data and labels.
         &#34;&#34;&#34;
         pass
 
@@ -636,34 +693,27 @@ defaults to 10.</dd>
         &#34;&#34;&#34;
         # Set data
         self.data = data
-        # Number of observations
-        N_obs = len(data)
-        # Order
-        order = data.groupby([&#39;user_id&#39;, &#39;session_id&#39;])[&#39;item_id&#39;]\
-                    .cumcount()
-        # Scaling factor
-        sf = order.apply(lambda x: 1 / x if x &gt; 0 else 0)
-        sf = sf.to_numpy(dtype=&#39;float32&#39;)
+
         # Number of items
         C = data[&#39;item_id&#39;].nunique()
         # Number of users
         U = data[&#39;user_id&#39;].nunique()
-        # Observations index
-        obs_idx = preprocessing.LabelEncoder().fit_transform(data.index)
-        obs_idx = obs_idx.astype(&#39;int32&#39;)
-        # Items
-        items = data[&#39;item_id&#39;]
-        items_idx = preprocessing.LabelEncoder().fit_transform(items)
-        items_idx = items_idx.astype(&#39;int32&#39;)
-        # Users
-        users = data[&#39;user_id&#39;]
-        users_idx = preprocessing.LabelEncoder().fit_transform(users)
-        users_idx = users_idx.astype(&#39;int32&#39;)
+
+        # Get preprocessed data variables
+        data_vars = _prepare_data(data)
 
         logging.info(&#39;Building the Shopper model...&#39;)
         with pm.Model() as shopper:
-            # Latent variables
+            # Data
+            prices = pm.Data(&#39;prices&#39;, data_vars[&#39;prices&#39;])
+            order = pm.Data(&#39;order&#39;, data_vars[&#39;order&#39;])
+            sf = pm.Data(&#39;sf&#39;, data_vars[&#39;sf&#39;])
+            obs_idx = pm.Data(&#39;obs_idx&#39;, data_vars[&#39;obs_idx&#39;])
+            items_idx = pm.Data(&#39;items_idx&#39;, data_vars[&#39;items_idx&#39;])
+            users_idx = pm.Data(&#39;users_idx&#39;, data_vars[&#39;users_idx&#39;])
+            labels = pm.Data(&#39;labels&#39;, data_vars[&#39;labels&#39;])
 
+            # Latent variables
             # per item interaction coefficients
             rho_c = pm.Normal(&#39;rho_c&#39;,
                               mu=0,
@@ -682,7 +732,7 @@ defaults to 10.</dd>
                                 sigma=theta_var,
                                 shape=(U, K),
                                 dtype=&#39;float32&#39;)
-            # per item popularities
+            # per item popularity
             lambda_c = pm.Normal(&#39;lambda_c&#39;,
                                  mu=0,
                                  sigma=lambda_var,
@@ -708,7 +758,7 @@ defaults to 10.</dd>
             psi_tc = lambda_c[items_idx] +\
                 pm.math.dot(theta_u[users_idx], alpha_c[items_idx].T) -\
                 pm.math.dot(gamma_u[users_idx], beta_c[items_idx].T) *\
-                np.log(data[&#39;price&#39;]).astype(price_dtype)
+                np.log(prices).astype(price_dtype)
 
             # sum^{i-1}_j [alpha_{y_tj}]
             def basket_items_attr(omega_prev, idx, alpha_c, order):
@@ -725,10 +775,10 @@ defaults to 10.</dd>
             omega_ti = tt.vector(&#39;omega_ti&#39;)
             omega_ti, updates = theano.scan(fn=basket_items_attr,
                                             outputs_info=omega_0,
-                                            non_sequences=[tt.arange(N_obs),
+                                            non_sequences=[obs_idx,
                                                            alpha_c,
                                                            order],
-                                            n_steps=N_obs)
+                                            n_steps=obs_idx.shape[0])
             # Mean utility per basket per item
             Psi_tci = tt.vector(&#39;Psi_tci&#39;)
             Psi_tci = psi_tc + pm.math.dot(rho_c[items_idx],
@@ -736,9 +786,6 @@ defaults to 10.</dd>
 
             # Softmax likelihood p(y_ti = c | y_t0, y_t1, ..., y_ti-1)
             p = pm.Deterministic(&#39;p&#39;, tt.nnet.softmax(Psi_tci))
-            labels = preprocessing.LabelEncoder()\
-                                  .fit_transform(data[&#39;item_id&#39;])
-            labels = labels.astype(&#39;int32&#39;)
             y = pm.Categorical(&#39;y&#39;, p=p, observed=labels)
 
         logging.info(&#34;Done building the Shopper model.&#34;)
@@ -794,7 +841,7 @@ defaults to 10.</dd>
                                 step=step,
                                 return_inferencedata=True,
                                 random_seed=random_seed)
-        return ShopperResults(res)</code></pre>
+        return ShopperResults(model, res)</code></pre>
 </details>
 <h3>Methods</h3>
 <dl>
@@ -885,19 +932,21 @@ Defaults to True.</dd>
                             step=step,
                             return_inferencedata=True,
                             random_seed=random_seed)
-    return ShopperResults(res)</code></pre>
+    return ShopperResults(model, res)</code></pre>
 </details>
 </dd>
 </dl>
 </dd>
 <dt id="pyshopper.shopper.ShopperResults"><code class="flex name class">
 <span>class <span class="ident">ShopperResults</span></span>
-<span>(</span><span>res)</span>
+<span>(</span><span>model, res)</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Results class for a fitted Shopper model.</p>
 <h2 id="attributes">Attributes</h2>
 <dl>
+<dt><strong><code>model</code></strong> :&ensp;<code>PyMC3 Model</code></dt>
+<dd>Shopper model.</dd>
 <dt><strong><code>res</code></strong> :&ensp;<code>PyMC3 results instance</code></dt>
 <dd>If MCMC, then requires arviz.InferenceData or
 MultiTrace.InferenceData. Else if ADVI, then
@@ -911,12 +960,16 @@ requires pymc3.variational.opvi.Approximation.</dd>
     &#34;&#34;&#34;Results class for a fitted Shopper model.
 
     Attributes:
+        model (PyMC3 Model): 
+            Shopper model.
+
         res (PyMC3 results instance): 
             If MCMC, then requires arviz.InferenceData or
             MultiTrace.InferenceData. Else if ADVI, then
             requires pymc3.variational.opvi.Approximation.
     &#34;&#34;&#34;
-    def __init__(self, res):
+    def __init__(self, model, res):
+        self.model = model
         self.res = res
 
     def summary(self, **kwargs):
@@ -927,7 +980,10 @@ requires pymc3.variational.opvi.Approximation.</dd>
         &#34;&#34;&#34;
         res = self.res
         if &#39;variational&#39; in str(type(res)):
-            trace = res.sample(kwargs[&#39;draws&#39;])
+            logging.info(&#39;Sampling from posterior distribution...&#39;)
+            trace = res.sample(draws=kwargs[&#39;draws&#39;])
+            logging.info(&#39;Sampling complete.&#39;)
+            logging.info(&#39;Computing posterior statistics...&#39;)
             summary = az.summary(trace, kind=&#39;stats&#39;)
         else:
             summary = az.summary(res)
@@ -940,12 +996,14 @@ requires pymc3.variational.opvi.Approximation.</dd>
         to be set in kwargs if model was fitted with ADVI.
         &#34;&#34;&#34;
         res = self.res
-        if type(res) == pm.variational.opvi.Approximation:
-            sample = res.sample(draws=kwargs[&#39;draws&#39;])
-            trace = az.plot_trace(sample)
+        if &#39;variational&#39; in str(type(res)):
+            logging.info(&#39;Sampling from posterior distribution...&#39;)
+            trace = res.sample(draws=kwargs[&#39;draws&#39;])
+            logging.info(&#39;Sampling complete.&#39;)
+            plot = az.plot_trace(trace)
         else:
-            trace = az.plot_trace(res)
-        return trace
+            plot = az.plot_trace(res)
+        return plot
 
     def rhat(self):
         &#34;&#34;&#34;Returns the Gelman-Rubin statistic.
@@ -976,15 +1034,36 @@ requires pymc3.variational.opvi.Approximation.</dd>
         plt.xlabel(&#39;n iterations&#39;)
         return fig
 
-    def predict(self, X):
-        &#34;&#34;&#34;Returns predicted probabilities for
-        samples in X.
+    def predict(self, data, random_seed=42, **kwargs):
+        &#34;&#34;&#34;Returns predicted probabilities of outcomes for samples in X.
         &#34;&#34;&#34;
-        pass
+        model = self.model
+        res = self.res
+        data_vars = _prepare_data(data)
+        with model:
+            # Pass new values to model
+            pm.set_data(data_vars)
+            # Use the updated values and
+            # predict outcomes and probabilities
+            if &#39;variational&#39; in str(type(res)):
+                logging.info(&#39;Sampling from posterior distribution...&#39;)
+                trace = res.sample(draws=kwargs[&#39;draws&#39;])
+                logging.info(&#39;Sampling complete.&#39;)
+                posterior_predictive = pm.sample_posterior_predictive(
+                    trace,
+                    var_names=[&#39;y&#39;],
+                    random_seed=random_seed
+                )
+            else:
+                posterior_predictive = pm.sample_posterior_predictive(
+                    res,
+                    var_names=[&#39;y&#39;],
+                    random_seed=random_seed
+                )
+        return posterior_predictive[&#39;y&#39;]
 
-    def score(self, X, y):
-        &#34;&#34;&#34;Returns the mean accuracy on the given test data
-        and labels.
+    def score(self, data):
+        &#34;&#34;&#34;Returns the mean accuracy on the given test data and labels.
         &#34;&#34;&#34;
         pass</code></pre>
 </details>
@@ -1037,20 +1116,41 @@ MCMC sampling.</p></div>
 </details>
 </dd>
 <dt id="pyshopper.shopper.ShopperResults.predict"><code class="name flex">
-<span>def <span class="ident">predict</span></span>(<span>self, X)</span>
+<span>def <span class="ident">predict</span></span>(<span>self, data, random_seed=42, **kwargs)</span>
 </code></dt>
 <dd>
-<div class="desc"><p>Returns predicted probabilities for
-samples in X.</p></div>
+<div class="desc"><p>Returns predicted probabilities of outcomes for samples in X.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def predict(self, X):
-    &#34;&#34;&#34;Returns predicted probabilities for
-    samples in X.
+<pre><code class="python">def predict(self, data, random_seed=42, **kwargs):
+    &#34;&#34;&#34;Returns predicted probabilities of outcomes for samples in X.
     &#34;&#34;&#34;
-    pass</code></pre>
+    model = self.model
+    res = self.res
+    data_vars = _prepare_data(data)
+    with model:
+        # Pass new values to model
+        pm.set_data(data_vars)
+        # Use the updated values and
+        # predict outcomes and probabilities
+        if &#39;variational&#39; in str(type(res)):
+            logging.info(&#39;Sampling from posterior distribution...&#39;)
+            trace = res.sample(draws=kwargs[&#39;draws&#39;])
+            logging.info(&#39;Sampling complete.&#39;)
+            posterior_predictive = pm.sample_posterior_predictive(
+                trace,
+                var_names=[&#39;y&#39;],
+                random_seed=random_seed
+            )
+        else:
+            posterior_predictive = pm.sample_posterior_predictive(
+                res,
+                var_names=[&#39;y&#39;],
+                random_seed=random_seed
+            )
+    return posterior_predictive[&#39;y&#39;]</code></pre>
 </details>
 </dd>
 <dt id="pyshopper.shopper.ShopperResults.rhat"><code class="name flex">
@@ -1074,18 +1174,16 @@ MCMC sampling.</p></div>
 </details>
 </dd>
 <dt id="pyshopper.shopper.ShopperResults.score"><code class="name flex">
-<span>def <span class="ident">score</span></span>(<span>self, X, y)</span>
+<span>def <span class="ident">score</span></span>(<span>self, data)</span>
 </code></dt>
 <dd>
-<div class="desc"><p>Returns the mean accuracy on the given test data
-and labels.</p></div>
+<div class="desc"><p>Returns the mean accuracy on the given test data and labels.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def score(self, X, y):
-    &#34;&#34;&#34;Returns the mean accuracy on the given test data
-    and labels.
+<pre><code class="python">def score(self, data):
+    &#34;&#34;&#34;Returns the mean accuracy on the given test data and labels.
     &#34;&#34;&#34;
     pass</code></pre>
 </details>
@@ -1109,7 +1207,10 @@ to be set in kwargs if model was fitted with ADVI.</p></div>
     &#34;&#34;&#34;
     res = self.res
     if &#39;variational&#39; in str(type(res)):
-        trace = res.sample(kwargs[&#39;draws&#39;])
+        logging.info(&#39;Sampling from posterior distribution...&#39;)
+        trace = res.sample(draws=kwargs[&#39;draws&#39;])
+        logging.info(&#39;Sampling complete.&#39;)
+        logging.info(&#39;Computing posterior statistics...&#39;)
         summary = az.summary(trace, kind=&#39;stats&#39;)
     else:
         summary = az.summary(res)
@@ -1134,12 +1235,14 @@ to be set in kwargs if model was fitted with ADVI.</p></div>
     to be set in kwargs if model was fitted with ADVI.
     &#34;&#34;&#34;
     res = self.res
-    if type(res) == pm.variational.opvi.Approximation:
-        sample = res.sample(draws=kwargs[&#39;draws&#39;])
-        trace = az.plot_trace(sample)
+    if &#39;variational&#39; in str(type(res)):
+        logging.info(&#39;Sampling from posterior distribution...&#39;)
+        trace = res.sample(draws=kwargs[&#39;draws&#39;])
+        logging.info(&#39;Sampling complete.&#39;)
+        plot = az.plot_trace(trace)
     else:
-        trace = az.plot_trace(res)
-    return trace</code></pre>
+        plot = az.plot_trace(res)
+    return plot</code></pre>
 </details>
 </dd>
 </dl>
