@@ -9,11 +9,10 @@
 + Francisco J. R. Ruiz, Susan Athey, David M. Blei. SHOPPER: A Probabilistic Model of Consumer Choice with Substitutes and Complements. ArXiv 1711.03560. 2017.
 
 ## Project Status
-- This mini-project is under active development. 
-- This model can be fitted with either MCMC sampling or variational inference. 
-- An example is provided in the Jupyter notebook `example.ipynb`.
-- `PyShopper` code has been tested in Colab on a dataset with 5000 observed trips (~15000 observations). 
-- Depending on your RAM, I do not know whether the code is memory efficient enough for a larger dataset. 
+- This mini-project is under active development
+- Inference is NOT optimised
+- An example is provided in the Jupyter notebook `example.ipynb`
+- `PyShopper` code has been tested on a very limited dataset (2 items, 10 sessions, ~2300 observations)
 
 ## Background
 The goals of this mini-project were to:
@@ -26,7 +25,7 @@ The goals of this mini-project were to:
 - `arviz`
 - `numpy`
 - `pandas`
-- `pymc3 >= 3.10`
+- `pymc3 >= 3.11`
 - `seaborn`
 - `scikit-learn`
 - `theano`
@@ -53,7 +52,7 @@ from pyshopper import shopper
 
 # Load data
 # Note: this dataset is unlikely to large to fit in memory
-# Consider limiting the number of trips to ~1000.
+# Consider limiting the number of items and users (see example.ipynb)
 X_train = shopper.load_data('data/train.tsv',
                             'data/prices.tsv')
 
@@ -74,6 +73,6 @@ res.summary(draws=1000)
 
 ## Roadmap
 - Implement baseline Shopper without seasonality effects on a limited dataset (Complete)
-- Add random sampling of unordered baskets (TBD)
+- Implement basket sub-sampling and one-vs-each approximation to softmax (TBD)
 - Add seasonality effects (TBD)
 - Add thinking ahead procedure (TBD)
