@@ -153,27 +153,32 @@ class Shopper:
         order = data.groupby(['user_id', 'session_id'])['item_id']\
                     .cumcount()
         # Scaling factor
-        sf = order.apply(lambda x: 1 / x if x > 0 else 0)
-        sf = sf.to_numpy(dtype='float32')
+        sf = (order.apply(lambda x: 1 / x if x > 0 else 0)
+                   .to_numpy(dtype='float32'))
         # Number of items
         C = data['item_id'].nunique()
         # Number of users
         U = data['user_id'].nunique()
         # Observations index
-        obs_idx = preprocessing.LabelEncoder().fit_transform(data.index)
-        obs_idx = obs_idx.astype('int32')
+        obs_idx = (data.index
+                       .apply(preprocessing.LabelEncoder()
+                                           .fit_transform)
+                       .astype('int32'))
         # Items
-        items = data['item_id']
-        items_idx = preprocessing.LabelEncoder().fit_transform(items)
-        items_idx = items_idx.astype('int32')
+        items_idx = (data.iloc[:, 'item_id']
+                         .apply(preprocessing.LabelEncoder()
+                                             .fit_transform)
+                         .astype('int32'))
         # Users
-        users = data['user_id']
-        users_idx = preprocessing.LabelEncoder().fit_transform(users)
-        users_idx = users_idx.astype('int32')
+        users_idx = (data.iloc[:, 'user_id']
+                         .apply(preprocessing.LabelEncoder()
+                                             .fit_transform)
+                         .astype('int32'))
         # Labels
-        labels = preprocessing.LabelEncoder()\
-                              .fit_transform(data['item_id'])
-        labels = labels.astype('int32')
+        labels = (data.iloc[:, 'item_id']
+                      .apply(preprocessing.LabelEncoder()
+                                          .fit_transform)
+                      .astype('int32'))
 
         logging.info('Building the Shopper model...')
         with pm.Model() as shopper:
@@ -181,7 +186,6 @@ class Shopper:
             N_obs = pm.Data('N_obs', N_obs)
             order = pm.Data('order', order)
             sf = pm.Data('sf', sf)
-            C = pm.Data('C', C)
             obs_idx = pm.Data('obs_idx', obs_idx)
             items_idx = pm.Data('items_idx', items_idx)
             users_idx = pm.Data('users_idx', users_idx)
