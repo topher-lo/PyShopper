@@ -170,11 +170,24 @@ class Shopper:
         users = data['user_id']
         users_idx = preprocessing.LabelEncoder().fit_transform(users)
         users_idx = users_idx.astype('int32')
+        # Labels
+        labels = preprocessing.LabelEncoder()\
+                              .fit_transform(data['item_id'])
+        labels = labels.astype('int32')
 
         logging.info('Building the Shopper model...')
         with pm.Model() as shopper:
-            # Latent variables
+            # Data
+            N_obs = pm.Data('N_obs', N_obs)
+            order = pm.Data('order', order)
+            sf = pm.Data('sf', sf)
+            C = pm.Data('C', C)
+            obs_idx = pm.Data('obs_idx', obs_idx)
+            items_idx = pm.Data('items_idx', items_idx)
+            users_idx = pm.Data('users_idx', users_idx)
+            labels = pm.Data('labels', labels)
 
+            # Latent variables
             # per item interaction coefficients
             rho_c = pm.Normal('rho_c',
                               mu=0,
@@ -193,7 +206,7 @@ class Shopper:
                                 sigma=theta_var,
                                 shape=(U, K),
                                 dtype='float32')
-            # per item popularities
+            # per item popularity
             lambda_c = pm.Normal('lambda_c',
                                  mu=0,
                                  sigma=lambda_var,
@@ -247,9 +260,6 @@ class Shopper:
 
             # Softmax likelihood p(y_ti = c | y_t0, y_t1, ..., y_ti-1)
             p = pm.Deterministic('p', tt.nnet.softmax(Psi_tci))
-            labels = preprocessing.LabelEncoder()\
-                                  .fit_transform(data['item_id'])
-            labels = labels.astype('int32')
             y = pm.Categorical('y', p=p, observed=labels)
 
         logging.info("Done building the Shopper model.")
