@@ -245,7 +245,6 @@ class Shopper:
             # Baseline utility per item per user:
             # Item popularity + Consumer Preferences - Price Effects
             # Note: variation comes from customer index and item prices
-            psi_tc = tt.vector('psi_tc')
             psi_tc = lambda_c[items_idx] +\
                 pm.math.dot(theta_u[users_idx], alpha_c[items_idx].T) -\
                 pm.math.dot(gamma_u[users_idx], beta_c[items_idx].T) *\
@@ -271,10 +270,8 @@ class Shopper:
                                                            order],
                                             n_steps=obs_idx.shape[0])
             # Mean utility per basket per item
-            Psi_tci = tt.vector('Psi_tci')
             Psi_tci = psi_tc + pm.math.dot(rho_c[items_idx],
                                            omega_ti[obs_idx-1].T)*sf[obs_idx]
-
             # Softmax likelihood p(y_ti = c | y_t0, y_t1, ..., y_ti-1)
             p = pm.Deterministic('p', tt.nnet.softmax(Psi_tci))
             y = pm.Categorical('y', p=p, observed=labels)
@@ -430,16 +427,14 @@ class ShopperResults:
                 logging.info('Sampling complete.')
                 posterior_predictive = pm.sample_posterior_predictive(
                     trace,
-                    var_names=['y'],
                     random_seed=random_seed
                 )
             else:
                 posterior_predictive = pm.sample_posterior_predictive(
                     res,
-                    var_names=['y'],
                     random_seed=random_seed
                 )
-        return posterior_predictive['y']
+        return posterior_predictive
 
     def score(self, data):
         """Returns the mean accuracy on the given test data and labels.
