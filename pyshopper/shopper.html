@@ -232,13 +232,18 @@ class Shopper:
         logging.info(&#39;Building the Shopper model...&#39;)
         with pm.Model() as shopper:
             # Data
-            prices = pm.Data(&#39;prices&#39;, data_vars[&#39;prices&#39;])
+            prices = pm.Data(&#39;prices&#39;,
+                             data_vars[&#39;prices&#39;])
             order = pm.Data(&#39;order&#39;, data_vars[&#39;order&#39;])
             sf = pm.Data(&#39;sf&#39;, data_vars[&#39;sf&#39;])
-            obs_idx = pm.Data(&#39;obs_idx&#39;, data_vars[&#39;obs_idx&#39;])
-            items_idx = pm.Data(&#39;items_idx&#39;, data_vars[&#39;items_idx&#39;])
-            users_idx = pm.Data(&#39;users_idx&#39;, data_vars[&#39;users_idx&#39;])
-            labels = pm.Data(&#39;labels&#39;, data_vars[&#39;labels&#39;])
+            obs_idx = pm.Data(&#39;obs_idx&#39;,
+                              data_vars[&#39;obs_idx&#39;])
+            items_idx = pm.Data(&#39;items_idx&#39;,
+                                data_vars[&#39;items_idx&#39;])
+            users_idx = pm.Data(&#39;users_idx&#39;,
+                                data_vars[&#39;users_idx&#39;])
+            labels = pm.Data(&#39;labels&#39;,
+                             data_vars[&#39;labels&#39;])
 
             # Latent variables
             # per item interaction coefficients
@@ -281,7 +286,6 @@ class Shopper:
             # Baseline utility per item per user:
             # Item popularity + Consumer Preferences - Price Effects
             # Note: variation comes from customer index and item prices
-            psi_tc = tt.vector(&#39;psi_tc&#39;)
             psi_tc = lambda_c[items_idx] +\
                 pm.math.dot(theta_u[users_idx], alpha_c[items_idx].T) -\
                 pm.math.dot(gamma_u[users_idx], beta_c[items_idx].T) *\
@@ -307,10 +311,8 @@ class Shopper:
                                                            order],
                                             n_steps=obs_idx.shape[0])
             # Mean utility per basket per item
-            Psi_tci = tt.vector(&#39;Psi_tci&#39;)
             Psi_tci = psi_tc + pm.math.dot(rho_c[items_idx],
                                            omega_ti[obs_idx-1].T)*sf[obs_idx]
-
             # Softmax likelihood p(y_ti = c | y_t0, y_t1, ..., y_ti-1)
             p = pm.Deterministic(&#39;p&#39;, tt.nnet.softmax(Psi_tci))
             y = pm.Categorical(&#39;y&#39;, p=p, observed=labels)
@@ -466,16 +468,14 @@ class ShopperResults:
                 logging.info(&#39;Sampling complete.&#39;)
                 posterior_predictive = pm.sample_posterior_predictive(
                     trace,
-                    var_names=[&#39;y&#39;],
                     random_seed=random_seed
                 )
             else:
                 posterior_predictive = pm.sample_posterior_predictive(
                     res,
-                    var_names=[&#39;y&#39;],
                     random_seed=random_seed
                 )
-        return posterior_predictive[&#39;y&#39;]
+        return posterior_predictive
 
     def score(self, data):
         &#34;&#34;&#34;Returns the mean accuracy on the given test data and labels.
@@ -705,13 +705,18 @@ defaults to 10.</dd>
         logging.info(&#39;Building the Shopper model...&#39;)
         with pm.Model() as shopper:
             # Data
-            prices = pm.Data(&#39;prices&#39;, data_vars[&#39;prices&#39;])
+            prices = pm.Data(&#39;prices&#39;,
+                             data_vars[&#39;prices&#39;])
             order = pm.Data(&#39;order&#39;, data_vars[&#39;order&#39;])
             sf = pm.Data(&#39;sf&#39;, data_vars[&#39;sf&#39;])
-            obs_idx = pm.Data(&#39;obs_idx&#39;, data_vars[&#39;obs_idx&#39;])
-            items_idx = pm.Data(&#39;items_idx&#39;, data_vars[&#39;items_idx&#39;])
-            users_idx = pm.Data(&#39;users_idx&#39;, data_vars[&#39;users_idx&#39;])
-            labels = pm.Data(&#39;labels&#39;, data_vars[&#39;labels&#39;])
+            obs_idx = pm.Data(&#39;obs_idx&#39;,
+                              data_vars[&#39;obs_idx&#39;])
+            items_idx = pm.Data(&#39;items_idx&#39;,
+                                data_vars[&#39;items_idx&#39;])
+            users_idx = pm.Data(&#39;users_idx&#39;,
+                                data_vars[&#39;users_idx&#39;])
+            labels = pm.Data(&#39;labels&#39;,
+                             data_vars[&#39;labels&#39;])
 
             # Latent variables
             # per item interaction coefficients
@@ -754,7 +759,6 @@ defaults to 10.</dd>
             # Baseline utility per item per user:
             # Item popularity + Consumer Preferences - Price Effects
             # Note: variation comes from customer index and item prices
-            psi_tc = tt.vector(&#39;psi_tc&#39;)
             psi_tc = lambda_c[items_idx] +\
                 pm.math.dot(theta_u[users_idx], alpha_c[items_idx].T) -\
                 pm.math.dot(gamma_u[users_idx], beta_c[items_idx].T) *\
@@ -780,10 +784,8 @@ defaults to 10.</dd>
                                                            order],
                                             n_steps=obs_idx.shape[0])
             # Mean utility per basket per item
-            Psi_tci = tt.vector(&#39;Psi_tci&#39;)
             Psi_tci = psi_tc + pm.math.dot(rho_c[items_idx],
                                            omega_ti[obs_idx-1].T)*sf[obs_idx]
-
             # Softmax likelihood p(y_ti = c | y_t0, y_t1, ..., y_ti-1)
             p = pm.Deterministic(&#39;p&#39;, tt.nnet.softmax(Psi_tci))
             y = pm.Categorical(&#39;y&#39;, p=p, observed=labels)
@@ -1051,16 +1053,14 @@ requires pymc3.variational.opvi.Approximation.</dd>
                 logging.info(&#39;Sampling complete.&#39;)
                 posterior_predictive = pm.sample_posterior_predictive(
                     trace,
-                    var_names=[&#39;y&#39;],
                     random_seed=random_seed
                 )
             else:
                 posterior_predictive = pm.sample_posterior_predictive(
                     res,
-                    var_names=[&#39;y&#39;],
                     random_seed=random_seed
                 )
-        return posterior_predictive[&#39;y&#39;]
+        return posterior_predictive
 
     def score(self, data):
         &#34;&#34;&#34;Returns the mean accuracy on the given test data and labels.
@@ -1141,16 +1141,14 @@ MCMC sampling.</p></div>
             logging.info(&#39;Sampling complete.&#39;)
             posterior_predictive = pm.sample_posterior_predictive(
                 trace,
-                var_names=[&#39;y&#39;],
                 random_seed=random_seed
             )
         else:
             posterior_predictive = pm.sample_posterior_predictive(
                 res,
-                var_names=[&#39;y&#39;],
                 random_seed=random_seed
             )
-    return posterior_predictive[&#39;y&#39;]</code></pre>
+    return posterior_predictive</code></pre>
 </details>
 </dd>
 <dt id="pyshopper.shopper.ShopperResults.rhat"><code class="name flex">
