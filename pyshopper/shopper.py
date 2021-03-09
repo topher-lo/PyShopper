@@ -7,6 +7,7 @@ ArXiv 1711.03560. 2017.
 """
 
 import arviz as az
+import copy
 import logging
 import numpy as np
 import theano
@@ -133,7 +134,7 @@ class Shopper:
                  gamma_shape: float = 100,
                  beta_rate: float = 1000,
                  beta_shape: float = 100):
-        """Intialises Shopper instance.
+        """Initializes Shopper instance.
 
         Args:
             data (Pandas DataFrame): 
@@ -209,19 +210,19 @@ class Shopper:
             rho_c = pm.Normal('rho_c',
                               mu=0,
                               sigma=rho_var,
-                              shape=(C, K),
+                              shape=(K, C),
                               dtype='float32')
             # per item attributes
             alpha_c = pm.Normal('alpha_c',
                                 mu=0,
                                 sigma=alpha_var,
-                                shape=(C, K),
+                                shape=(K, C),
                                 dtype='float32')
             # per user preferences
             theta_u = pm.Normal('theta_u',
                                 mu=0,
                                 sigma=theta_var,
-                                shape=(U, K),
+                                shape=(K, U),
                                 dtype='float32')
             # per item popularity
             lambda_c = pm.Normal('lambda_c',
@@ -233,22 +234,26 @@ class Shopper:
             gamma_u = pm.Gamma('gamma_u',
                                beta=gamma_rate,
                                alpha=gamma_shape,
-                               shape=(U, price_dim),
+                               shape=(price_dim, U),
                                dtype='float32')
             # per item price sensitivities
             beta_c = pm.Gamma('beta_c',
                               beta=beta_rate,
                               alpha=beta_shape,
-                              shape=(C, price_dim),
+                              shape=(price_dim, C),
                               dtype='float32')
 
-            # Baseline utility per item per user:
+            # Baseline utility per basket per item
             # Item popularity + Consumer Preferences - Price Effects
             # Note: variation comes from customer index and item prices
-            psi_tc = lambda_c[items_idx] +\
-                pm.math.dot(theta_u[users_idx], alpha_c[items_idx].T) -\
-                pm.math.dot(gamma_u[users_idx], beta_c[items_idx].T) *\
-                np.log(prices).astype(price_dtype)
+            psi_tc = pm.Deterministic(
+                'psi_tc',
+                lambda_c +
+                pm.math.dot(theta_u[:, users_idx].T, alpha_c) -
+                pm.math.dot(np.log(prices).astype(price_dtype),
+                            pm.math.dot(gamma_u[:, users_idx].T, beta_c))
+            )
+            logging.info('psi_tc shape: {}'.format(psi_tc.tag.test_value.shape))
 
             # sum^{i-1}_j [alpha_{y_tj}]
             def basket_items_attr(omega_prev, idx, alpha_c, order):
@@ -257,7 +262,7 @@ class Shopper:
                     # No price-attributes interaction effects
                     omega_ti = tt.zeros(K)
                 else:
-                    omega_ti = omega_prev + alpha_c[idx-1]
+                    omega_ti = omega_prev + alpha_c[:, idx-1]
                 return omega_ti
 
             # omega_ti initial value
@@ -270,11 +275,22 @@ class Shopper:
                                                            order],
                                             n_steps=obs_idx.shape[0])
             # Mean utility per basket per item
-            Psi_tci = psi_tc + pm.math.dot(rho_c[items_idx],
-                                           omega_ti[obs_idx-1].T)*sf[obs_idx]
+            Psi_tci = pm.Deterministic(
+                'Psi_tci',
+                psi_tc + pm.math.dot(
+                    sf[obs_idx],
+                    pm.math.dot(omega_ti[obs_idx-1, :], rho_c))
+            )
+            logging.info('Psi_tci shape: {}'.format(
+                Psi_tci.tag.test_value.shape))
             # Softmax likelihood p(y_ti = c | y_t0, y_t1, ..., y_ti-1)
-            p = pm.Deterministic('p', tt.nnet.softmax(Psi_tci))
+            p = pm.Deterministic(
+                'p',
+                tt.nnet.softmax(Psi_tci[items_idx])
+            )
+            logging.info('p shape: {}'.format(p.tag.test_value.shape))
             y = pm.Categorical('y', p=p, observed=labels)
+            logging.info('y shape: {}'.format(y.tag.test_value.shape))
 
         logging.info("Done building the Shopper model.")
         # Set shopper to model attribute
@@ -323,12 +339,15 @@ class Shopper:
                 callback = CheckParametersConvergence(diff=diff)
                 res = pm.fit(n=N,
                              method='advi',
-                             callbacks=[callback])
+                             callbacks=[callback],
+                             random_seed=random_seed,
+                             **kwargs)
             else:
                 res = pm.sample(draws=N,
                                 step=step,
                                 return_inferencedata=True,
-                                random_seed=random_seed)
+                                random_seed=random_seed,
+                                **kwargs)
         return ShopperResults(model, res)
 
 
@@ -413,9 +432,10 @@ class ShopperResults:
     def predict(self, data, random_seed=42, **kwargs):
         """Returns predicted probabilities of outcomes for samples in X.
         """
-        model = self.model
+        model = copy.deepcopy(self.model)
         res = self.res
         data_vars = _prepare_data(data)
+        data_vars.pop('labels')  # Remove labels
         with model:
             # Pass new values to model
             pm.set_data(data_vars)
