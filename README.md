@@ -8,10 +8,12 @@
 + Francisco J. R. Ruiz, Susan Athey, David M. Blei. SHOPPER: A Probabilistic Model of Consumer Choice with Substitutes and Complements. ArXiv 1711.03560. 2017.
 
 ## Project Status
-- This mini-project is under active development
-- Inference is NOT optimised
-- Implementation is NOT tested
-- An example is provided in the Jupyter notebook `example.ipynb`
+- Project is put on hold
+- I've specified the baseline Shopper model with softmax log-likelihood
+- Implementation is not optimised (no reparameterisation, no one-vs-each approximation, no data subsampling)
+- For ~10,000+ observations, the ELBO loss function returns inf at the first iteration during ADVI optimisation
+- I am unlikely to find a solution to these numerical issues with my current ability
+- Will revisit in the future when I have more time and experience
 
 ## Background
 The goals of this mini-project were to:
