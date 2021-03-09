@@ -12,7 +12,6 @@
 - Inference is NOT optimised
 - Implementation is NOT tested
 - An example is provided in the Jupyter notebook `example.ipynb`
-- `PyShopper` code has been tested on a very limited dataset (2 items, 10 sessions, ~2300 observations)
 
 ## Background
 The goals of this mini-project were to:
