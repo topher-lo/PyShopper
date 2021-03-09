@@ -43,6 +43,7 @@ ArXiv 1711.03560. 2017.
 &#34;&#34;&#34;
 
 import arviz as az
+import copy
 import logging
 import numpy as np
 import theano
@@ -169,7 +170,7 @@ class Shopper:
                  gamma_shape: float = 100,
                  beta_rate: float = 1000,
                  beta_shape: float = 100):
-        &#34;&#34;&#34;Intialises Shopper instance.
+        &#34;&#34;&#34;Initializes Shopper instance.
 
         Args:
             data (Pandas DataFrame): 
@@ -232,37 +233,32 @@ class Shopper:
         logging.info(&#39;Building the Shopper model...&#39;)
         with pm.Model() as shopper:
             # Data
-            prices = pm.Data(&#39;prices&#39;,
-                             data_vars[&#39;prices&#39;])
+            prices = pm.Data(&#39;prices&#39;, data_vars[&#39;prices&#39;])
             order = pm.Data(&#39;order&#39;, data_vars[&#39;order&#39;])
             sf = pm.Data(&#39;sf&#39;, data_vars[&#39;sf&#39;])
-            obs_idx = pm.Data(&#39;obs_idx&#39;,
-                              data_vars[&#39;obs_idx&#39;])
-            items_idx = pm.Data(&#39;items_idx&#39;,
-                                data_vars[&#39;items_idx&#39;])
-            users_idx = pm.Data(&#39;users_idx&#39;,
-                                data_vars[&#39;users_idx&#39;])
-            labels = pm.Data(&#39;labels&#39;,
-                             data_vars[&#39;labels&#39;])
+            obs_idx = pm.Data(&#39;obs_idx&#39;, data_vars[&#39;obs_idx&#39;])
+            items_idx = pm.Data(&#39;items_idx&#39;, data_vars[&#39;items_idx&#39;])
+            users_idx = pm.Data(&#39;users_idx&#39;, data_vars[&#39;users_idx&#39;])
+            labels = pm.Data(&#39;labels&#39;, data_vars[&#39;labels&#39;])
 
             # Latent variables
             # per item interaction coefficients
             rho_c = pm.Normal(&#39;rho_c&#39;,
                               mu=0,
                               sigma=rho_var,
-                              shape=(C, K),
+                              shape=(K, C),
                               dtype=&#39;float32&#39;)
             # per item attributes
             alpha_c = pm.Normal(&#39;alpha_c&#39;,
                                 mu=0,
                                 sigma=alpha_var,
-                                shape=(C, K),
+                                shape=(K, C),
                                 dtype=&#39;float32&#39;)
             # per user preferences
             theta_u = pm.Normal(&#39;theta_u&#39;,
                                 mu=0,
                                 sigma=theta_var,
-                                shape=(U, K),
+                                shape=(K, U),
                                 dtype=&#39;float32&#39;)
             # per item popularity
             lambda_c = pm.Normal(&#39;lambda_c&#39;,
@@ -274,22 +270,26 @@ class Shopper:
             gamma_u = pm.Gamma(&#39;gamma_u&#39;,
                                beta=gamma_rate,
                                alpha=gamma_shape,
-                               shape=(U, price_dim),
+                               shape=(price_dim, U),
                                dtype=&#39;float32&#39;)
             # per item price sensitivities
             beta_c = pm.Gamma(&#39;beta_c&#39;,
                               beta=beta_rate,
                               alpha=beta_shape,
-                              shape=(C, price_dim),
+                              shape=(price_dim, C),
                               dtype=&#39;float32&#39;)
 
-            # Baseline utility per item per user:
+            # Baseline utility per basket per item
             # Item popularity + Consumer Preferences - Price Effects
             # Note: variation comes from customer index and item prices
-            psi_tc = lambda_c[items_idx] +\
-                pm.math.dot(theta_u[users_idx], alpha_c[items_idx].T) -\
-                pm.math.dot(gamma_u[users_idx], beta_c[items_idx].T) *\
-                np.log(prices).astype(price_dtype)
+            psi_tc = pm.Deterministic(
+                &#39;psi_tc&#39;,
+                lambda_c +
+                pm.math.dot(theta_u[:, users_idx].T, alpha_c) -
+                pm.math.dot(np.log(prices).astype(price_dtype),
+                            pm.math.dot(gamma_u[:, users_idx].T, beta_c))
+            )
+            logging.info(&#39;psi_tc shape: {}&#39;.format(psi_tc.tag.test_value.shape))
 
             # sum^{i-1}_j [alpha_{y_tj}]
             def basket_items_attr(omega_prev, idx, alpha_c, order):
@@ -298,7 +298,7 @@ class Shopper:
                     # No price-attributes interaction effects
                     omega_ti = tt.zeros(K)
                 else:
-                    omega_ti = omega_prev + alpha_c[idx-1]
+                    omega_ti = omega_prev + alpha_c[:, idx-1]
                 return omega_ti
 
             # omega_ti initial value
@@ -311,11 +311,22 @@ class Shopper:
                                                            order],
                                             n_steps=obs_idx.shape[0])
             # Mean utility per basket per item
-            Psi_tci = psi_tc + pm.math.dot(rho_c[items_idx],
-                                           omega_ti[obs_idx-1].T)*sf[obs_idx]
+            Psi_tci = pm.Deterministic(
+                &#39;Psi_tci&#39;,
+                psi_tc + pm.math.dot(
+                    sf[obs_idx],
+                    pm.math.dot(omega_ti[obs_idx-1, :], rho_c))
+            )
+            logging.info(&#39;Psi_tci shape: {}&#39;.format(
+                Psi_tci.tag.test_value.shape))
             # Softmax likelihood p(y_ti = c | y_t0, y_t1, ..., y_ti-1)
-            p = pm.Deterministic(&#39;p&#39;, tt.nnet.softmax(Psi_tci))
+            p = pm.Deterministic(
+                &#39;p&#39;,
+                tt.nnet.softmax(Psi_tci[items_idx])
+            )
+            logging.info(&#39;p shape: {}&#39;.format(p.tag.test_value.shape))
             y = pm.Categorical(&#39;y&#39;, p=p, observed=labels)
+            logging.info(&#39;y shape: {}&#39;.format(y.tag.test_value.shape))
 
         logging.info(&#34;Done building the Shopper model.&#34;)
         # Set shopper to model attribute
@@ -364,12 +375,15 @@ class Shopper:
                 callback = CheckParametersConvergence(diff=diff)
                 res = pm.fit(n=N,
                              method=&#39;advi&#39;,
-                             callbacks=[callback])
+                             callbacks=[callback],
+                             random_seed=random_seed,
+                             **kwargs)
             else:
                 res = pm.sample(draws=N,
                                 step=step,
                                 return_inferencedata=True,
-                                random_seed=random_seed)
+                                random_seed=random_seed,
+                                **kwargs)
         return ShopperResults(model, res)
 
 
@@ -454,9 +468,10 @@ class ShopperResults:
     def predict(self, data, random_seed=42, **kwargs):
         &#34;&#34;&#34;Returns predicted probabilities of outcomes for samples in X.
         &#34;&#34;&#34;
-        model = self.model
+        model = copy.deepcopy(self.model)
         res = self.res
         data_vars = _prepare_data(data)
+        data_vars.pop(&#39;labels&#39;)  # Remove labels
         with model:
             # Pass new values to model
             pm.set_data(data_vars)
@@ -571,7 +586,7 @@ DataFrame with columns: user_id, item_id, session_id, and price.</dd>
 <dt><strong><code>model</code></strong> :&ensp;<code>PyMC3 Model</code></dt>
 <dd>Shopper model.</dd>
 </dl>
-<p>Intialises Shopper instance.</p>
+<p>Initializes Shopper instance.</p>
 <h2 id="args">Args</h2>
 <dl>
 <dt><strong><code>data</code></strong> :&ensp;<code>Pandas DataFrame</code></dt>
@@ -642,7 +657,7 @@ defaults to 10.</dd>
                  gamma_shape: float = 100,
                  beta_rate: float = 1000,
                  beta_shape: float = 100):
-        &#34;&#34;&#34;Intialises Shopper instance.
+        &#34;&#34;&#34;Initializes Shopper instance.
 
         Args:
             data (Pandas DataFrame): 
@@ -705,37 +720,32 @@ defaults to 10.</dd>
         logging.info(&#39;Building the Shopper model...&#39;)
         with pm.Model() as shopper:
             # Data
-            prices = pm.Data(&#39;prices&#39;,
-                             data_vars[&#39;prices&#39;])
+            prices = pm.Data(&#39;prices&#39;, data_vars[&#39;prices&#39;])
             order = pm.Data(&#39;order&#39;, data_vars[&#39;order&#39;])
             sf = pm.Data(&#39;sf&#39;, data_vars[&#39;sf&#39;])
-            obs_idx = pm.Data(&#39;obs_idx&#39;,
-                              data_vars[&#39;obs_idx&#39;])
-            items_idx = pm.Data(&#39;items_idx&#39;,
-                                data_vars[&#39;items_idx&#39;])
-            users_idx = pm.Data(&#39;users_idx&#39;,
-                                data_vars[&#39;users_idx&#39;])
-            labels = pm.Data(&#39;labels&#39;,
-                             data_vars[&#39;labels&#39;])
+            obs_idx = pm.Data(&#39;obs_idx&#39;, data_vars[&#39;obs_idx&#39;])
+            items_idx = pm.Data(&#39;items_idx&#39;, data_vars[&#39;items_idx&#39;])
+            users_idx = pm.Data(&#39;users_idx&#39;, data_vars[&#39;users_idx&#39;])
+            labels = pm.Data(&#39;labels&#39;, data_vars[&#39;labels&#39;])
 
             # Latent variables
             # per item interaction coefficients
             rho_c = pm.Normal(&#39;rho_c&#39;,
                               mu=0,
                               sigma=rho_var,
-                              shape=(C, K),
+                              shape=(K, C),
                               dtype=&#39;float32&#39;)
             # per item attributes
             alpha_c = pm.Normal(&#39;alpha_c&#39;,
                                 mu=0,
                                 sigma=alpha_var,
-                                shape=(C, K),
+                                shape=(K, C),
                                 dtype=&#39;float32&#39;)
             # per user preferences
             theta_u = pm.Normal(&#39;theta_u&#39;,
                                 mu=0,
                                 sigma=theta_var,
-                                shape=(U, K),
+                                shape=(K, U),
                                 dtype=&#39;float32&#39;)
             # per item popularity
             lambda_c = pm.Normal(&#39;lambda_c&#39;,
@@ -747,22 +757,26 @@ defaults to 10.</dd>
             gamma_u = pm.Gamma(&#39;gamma_u&#39;,
                                beta=gamma_rate,
                                alpha=gamma_shape,
-                               shape=(U, price_dim),
+                               shape=(price_dim, U),
                                dtype=&#39;float32&#39;)
             # per item price sensitivities
             beta_c = pm.Gamma(&#39;beta_c&#39;,
                               beta=beta_rate,
                               alpha=beta_shape,
-                              shape=(C, price_dim),
+                              shape=(price_dim, C),
                               dtype=&#39;float32&#39;)
 
-            # Baseline utility per item per user:
+            # Baseline utility per basket per item
             # Item popularity + Consumer Preferences - Price Effects
             # Note: variation comes from customer index and item prices
-            psi_tc = lambda_c[items_idx] +\
-                pm.math.dot(theta_u[users_idx], alpha_c[items_idx].T) -\
-                pm.math.dot(gamma_u[users_idx], beta_c[items_idx].T) *\
-                np.log(prices).astype(price_dtype)
+            psi_tc = pm.Deterministic(
+                &#39;psi_tc&#39;,
+                lambda_c +
+                pm.math.dot(theta_u[:, users_idx].T, alpha_c) -
+                pm.math.dot(np.log(prices).astype(price_dtype),
+                            pm.math.dot(gamma_u[:, users_idx].T, beta_c))
+            )
+            logging.info(&#39;psi_tc shape: {}&#39;.format(psi_tc.tag.test_value.shape))
 
             # sum^{i-1}_j [alpha_{y_tj}]
             def basket_items_attr(omega_prev, idx, alpha_c, order):
@@ -771,7 +785,7 @@ defaults to 10.</dd>
                     # No price-attributes interaction effects
                     omega_ti = tt.zeros(K)
                 else:
-                    omega_ti = omega_prev + alpha_c[idx-1]
+                    omega_ti = omega_prev + alpha_c[:, idx-1]
                 return omega_ti
 
             # omega_ti initial value
@@ -784,11 +798,22 @@ defaults to 10.</dd>
                                                            order],
                                             n_steps=obs_idx.shape[0])
             # Mean utility per basket per item
-            Psi_tci = psi_tc + pm.math.dot(rho_c[items_idx],
-                                           omega_ti[obs_idx-1].T)*sf[obs_idx]
+            Psi_tci = pm.Deterministic(
+                &#39;Psi_tci&#39;,
+                psi_tc + pm.math.dot(
+                    sf[obs_idx],
+                    pm.math.dot(omega_ti[obs_idx-1, :], rho_c))
+            )
+            logging.info(&#39;Psi_tci shape: {}&#39;.format(
+                Psi_tci.tag.test_value.shape))
             # Softmax likelihood p(y_ti = c | y_t0, y_t1, ..., y_ti-1)
-            p = pm.Deterministic(&#39;p&#39;, tt.nnet.softmax(Psi_tci))
+            p = pm.Deterministic(
+                &#39;p&#39;,
+                tt.nnet.softmax(Psi_tci[items_idx])
+            )
+            logging.info(&#39;p shape: {}&#39;.format(p.tag.test_value.shape))
             y = pm.Categorical(&#39;y&#39;, p=p, observed=labels)
+            logging.info(&#39;y shape: {}&#39;.format(y.tag.test_value.shape))
 
         logging.info(&#34;Done building the Shopper model.&#34;)
         # Set shopper to model attribute
@@ -837,12 +862,15 @@ defaults to 10.</dd>
                 callback = CheckParametersConvergence(diff=diff)
                 res = pm.fit(n=N,
                              method=&#39;advi&#39;,
-                             callbacks=[callback])
+                             callbacks=[callback],
+                             random_seed=random_seed,
+                             **kwargs)
             else:
                 res = pm.sample(draws=N,
                                 step=step,
                                 return_inferencedata=True,
-                                random_seed=random_seed)
+                                random_seed=random_seed,
+                                **kwargs)
         return ShopperResults(model, res)</code></pre>
 </details>
 <h3>Methods</h3>
@@ -928,12 +956,15 @@ Defaults to True.</dd>
             callback = CheckParametersConvergence(diff=diff)
             res = pm.fit(n=N,
                          method=&#39;advi&#39;,
-                         callbacks=[callback])
+                         callbacks=[callback],
+                         random_seed=random_seed,
+                         **kwargs)
         else:
             res = pm.sample(draws=N,
                             step=step,
                             return_inferencedata=True,
-                            random_seed=random_seed)
+                            random_seed=random_seed,
+                            **kwargs)
     return ShopperResults(model, res)</code></pre>
 </details>
 </dd>
@@ -1039,9 +1070,10 @@ requires pymc3.variational.opvi.Approximation.</dd>
     def predict(self, data, random_seed=42, **kwargs):
         &#34;&#34;&#34;Returns predicted probabilities of outcomes for samples in X.
         &#34;&#34;&#34;
-        model = self.model
+        model = copy.deepcopy(self.model)
         res = self.res
         data_vars = _prepare_data(data)
+        data_vars.pop(&#39;labels&#39;)  # Remove labels
         with model:
             # Pass new values to model
             pm.set_data(data_vars)
@@ -1127,9 +1159,10 @@ MCMC sampling.</p></div>
 <pre><code class="python">def predict(self, data, random_seed=42, **kwargs):
     &#34;&#34;&#34;Returns predicted probabilities of outcomes for samples in X.
     &#34;&#34;&#34;
-    model = self.model
+    model = copy.deepcopy(self.model)
     res = self.res
     data_vars = _prepare_data(data)
+    data_vars.pop(&#39;labels&#39;)  # Remove labels
     with model:
         # Pass new values to model
         pm.set_data(data_vars)
