@@ -36,15 +36,11 @@ To use `PyShopper`, you must first clone this repo:
 git clone git@github.com:topher-lo/PyShopper.git
 cd [..path/to/repo]
 ```
-Then install its dependencies using either `pip`:
+Then install its dependencies using `pip`:
 ```
 python3 -m venv env
 source env/bin/activate
 pip3 install -r requirements.txt
-```
-Or `conda`:
-```
-conda env create -f environment.yml
 ```
 
 ## :rocket: A quick example
